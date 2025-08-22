@@ -303,6 +303,8 @@ BatchMonitor <- R6Class("BatchMonitor",
       # 데이터프레임으로 변환
       results_df <- do.call(rbind, lapply(parsed_results, function(x) {
         if (is.null(x$row_index)) x$row_index <- NA
+        # dominant_emotion이 없는 경우 기본값 설정
+        if (is.null(x$dominant_emotion)) x$dominant_emotion <- "파싱 오류"
         data.frame(x, stringsAsFactors = FALSE)
       }))
       
@@ -310,7 +312,9 @@ BatchMonitor <- R6Class("BatchMonitor",
       final_df <- original_data %>%
         mutate(row_index = row_number()) %>%
         left_join(results_df, by = "row_index") %>%
-        select(-row_index)
+        select(-row_index) %>%
+        # dominant_emotion이 여전히 NA인 경우 기본값 설정
+        mutate(dominant_emotion = ifelse(is.na(dominant_emotion), "처리 안됨", dominant_emotion))
       
       log_message("INFO", sprintf("결과 파싱 완료: %d행", nrow(final_df)))
       return(final_df)
@@ -319,12 +323,34 @@ BatchMonitor <- R6Class("BatchMonitor",
     # 5. JSON 파싱 함수
     parse_emotion_json = function(json_text) {
       # functions.R의 기존 파싱 함수 사용
-      if (file.exists(PATHS$functions_file)) {
-        source(PATHS$functions_file, encoding = "UTF-8")
-        return(parse_emotion_json_internal(json_text))
-      } else {
-        stop("functions.R 파일을 찾을 수 없습니다.")
-      }
+      tryCatch({
+        if (file.exists(PATHS$functions_file)) {
+          source(PATHS$functions_file, encoding = "UTF-8")
+          result <- parse_emotion_json_internal(json_text)
+          # dominant_emotion이 없는 경우 기본값 설정
+          if (is.null(result$dominant_emotion) || is.na(result$dominant_emotion)) {
+            result$dominant_emotion <- "파싱 오류"
+          }
+          return(result)
+        } else {
+          stop("functions.R 파일을 찾을 수 없습니다.")
+        }
+      }, error = function(e) {
+        # 파싱 실패 시 기본 구조 반환
+        log_message("ERROR", sprintf("JSON 파싱 실패: %s", e$message))
+        return(list(
+          dominant_emotion = "파싱 오류",
+          rationale = sprintf("파싱 실패: %s", e$message),
+          기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
+          슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
+          P = NA, A = NA, D = NA,
+          complex_emotion = NA,
+          emotion_scores_rationale = NA,
+          PAD_analysis = NA,
+          complex_emotion_reasoning = NA,
+          error_message = sprintf("파싱 오류: %s", e$message)
+        ))
+      })
     },
     
     # 6. 완전한 배치 처리 (다운로드 + 파싱 + 저장)
@@ -446,13 +472,24 @@ BatchMonitor <- R6Class("BatchMonitor",
       saveRDS(final_df, rds_filename)
       readr::write_excel_csv(final_df, csv_filename, na = "")
       
-      # 분석 이력 등록
-      tracker$register_analysis(
-        final_df %>% filter(!is.na(dominant_emotion) & dominant_emotion != "API 오류"),
-        analysis_type = paste0("batch_", selected_mode),
-        model_used = BATCH_CONFIG$model_name,
-        analysis_file = "06_배치모니터_결과처리"
-      )
+      # 분석 이력 등록 (유효한 결과만)
+      valid_results <- final_df %>% 
+        filter(
+          !is.na(dominant_emotion) & 
+          dominant_emotion != "API 오류" & 
+          dominant_emotion != "파싱 오류"
+        )
+      
+      if (nrow(valid_results) > 0) {
+        tracker$register_analysis(
+          valid_results,
+          analysis_type = paste0("batch_", selected_mode),
+          model_used = BATCH_CONFIG$model_name,
+          analysis_file = "06_배치모니터_결과처리"
+        )
+      } else {
+        log_message("WARN", "유효한 분석 결과가 없어 이력 등록을 생략합니다.")
+      }
       
       # 완료 메시지
       cat("\n", rep("=", 70), "\n")
