@@ -1,0 +1,31 @@
+Academic Research License
+
+Copyright (c) 2025 Yang Yeondong (양연동)
+
+ACADEMIC RESEARCH USE ONLY
+
+This software is provided for academic research purposes only. 
+
+PERMITTED USES:
+- Academic research and publication
+- Methodology reproduction and verification for published papers
+- Educational purposes in university courses and research training
+- Conference presentations and academic seminars
+
+PROHIBITED USES:
+- Commercial use or incorporation into commercial products
+- Use in policy-making or administrative decisions
+- Personal emotion diagnosis or individual psychological assessment
+- Redistribution or derivative works without explicit permission
+
+CITATION REQUIREMENT:
+Any research publication using this system must include the following citation:
+"Yang, Y. (2025). Advanced Emotion Analysis Pipeline for Elementary Teacher Community using Plutchik's 8 Basic Emotions and PAD Model with Gemini 2.5 Flash Lite API. GitHub Repository."
+
+국문: "양연동. (2025). 플루치크 8대 감정 및 PAD 모델 기반 초등교사 커뮤니티 감정분석 고급 파이프라인. Gemini 2.5 Flash Lite API 활용. GitHub Repository."
+
+DISCLAIMER:
+This software is provided "as is" for research purposes only. The authors make no warranties about the accuracy or completeness of the emotion analysis results. Users are responsible for proper interpretation and validation of results.
+
+AI MODEL NOTICE:
+This system utilizes Google's Gemini 2.5 Flash Lite API, which is subject to Google's terms of service and usage policies.
