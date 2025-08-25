@@ -17,7 +17,7 @@
 #
 
 PROMPT_CONFIG <- list(
-  # 기본 시스템 프롬프트
+  # 공통 기본 프롬프트 (일반분석과 배치분석 모두 사용)
   base_instructions = '## 역할: 리서치 보조원
 ## 대상: 초등교사 커뮤니티 텍스트
 
@@ -45,6 +45,27 @@ PROMPT_CONFIG <- list(
 - 대립감정 동시 고득점 불가
 - 0.3이상 감정들로 복합감정 구성
 - 교사 커뮤니티 맥락 반영',
+
+  # 배치 전용 JSON 출력 지시 (기본 프롬프트에 추가됨)
+  batch_json_instruction = '
+
+## 중요: 응답은 반드시 유효한 JSON 형식으로만 출력하세요. 마크다운이나 다른 텍스트 없이 JSON만 출력하세요.
+
+## JSON 구조:
+{
+  "plutchik_emotions": {
+    "기쁨": 0.00, "신뢰": 0.00, "공포": 0.00, "놀람": 0.00,
+    "슬픔": 0.00, "혐오": 0.00, "분노": 0.00, "기대": 0.00
+  },
+  "PAD": {"P": 0.00, "A": 0.00, "D": 0.00},
+  "dominant_emotion": "감정명",
+  "complex_emotion": "복합감정명",
+  "rationale": {
+    "emotion_scores": "점수근거",
+    "PAD_analysis": "PAD근거", 
+    "complex_emotion_reasoning": "복합감정근거"
+  }
+}',
   
   # 댓글 분석용 작업 지시
   comment_task = "## 분석 과업: '원본 게시글' 맥락을 고려하여 '분석할 댓글'의 감정을 분석.",
@@ -62,7 +83,7 @@ PROMPT_CONFIG <- list(
 # API 설정 (gemini.R 패키지 사용)
 # =============================================================================
 API_CONFIG <- list(
-  model_name = "2.5-flash-lite",  # gemini.R 패키지 호환 모델
+  model_name = "2.5-flash",  # gemini.R 패키지 호환 모델
   temperature = 0.25,
   top_p = 0.85,
   rate_limit_per_minute = 3900,
@@ -72,7 +93,7 @@ API_CONFIG <- list(
 
 # 테스트 설정  
 TEST_CONFIG <- list(
-  model_name = "2.5-flash-lite",  # gemini.R 패키지 호환 모델
+  model_name = "2.5-flash",  # gemini.R 패키지 호환 모델
   temperature = 0.25,
   top_p = 0.85,
   max_retries = 3
@@ -81,7 +102,7 @@ TEST_CONFIG <- list(
 # 배치 처리 설정
 BATCH_CONFIG <- list(
   # 모델 및 API 설정
-  model_name = "gemini-2.5-flash-lite",           # 배치 전용 모델
+  model_name = "gemini-2.5-flash",                # 배치 모드 지원 모델
   temperature = 0.25,                        # 온도 설정
   top_p = 0.85,                             # Top-p 설정
   #max_output_tokens = 2048,                 # 최대 출력 토큰
@@ -118,6 +139,17 @@ BATCH_CONFIG <- list(
   base_url = "https://generativelanguage.googleapis.com/v1beta",  # API 베이스 URL
   status_check_delay_seconds = 2,           # 상태 확인 후 대기 시간
   file_name_format = "%Y%m%d_%H%M%S"        # 결과 파일명 시간 형식
+)
+
+# Python 배치 처리 설정
+PYTHON_CONFIG <- list(
+  use_python_batch = FALSE,                     # Python 배치 처리 사용 여부 (기본: R 방식 사용)
+  batch_processor_script = "libs/batch_processor.py",  # Python 배치 처리 스크립트 경로
+  default_model = "gemini-2.5-flash",          # Python 배치용 기본 모델
+  default_temperature = 0.25,                  # 기본 온도 설정
+  required_packages = c("google-generativeai", "pandas", "json"),  # 필수 패키지
+  auto_install_packages = FALSE,               # 자동 패키지 설치 여부
+  fallback_to_r = TRUE                         # Python 실패 시 R 방식으로 폴백
 )
 
 # 분석 설정

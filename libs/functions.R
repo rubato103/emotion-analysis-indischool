@@ -22,14 +22,19 @@ suppressMessages({
 }
 
 # 1. 프롬프트 생성 함수 (config.R의 PROMPT_CONFIG 사용)
-create_analysis_prompt <- function(text, 구분, title = NULL, context = NULL, context_title = NULL) {
+create_analysis_prompt <- function(text, 구분, title = NULL, context = NULL, context_title = NULL, batch_mode = FALSE) {
   
   # config.R에서 프롬프트 설정 로드 (필수)
   if (!exists("PROMPT_CONFIG")) {
     stop("❌ PROMPT_CONFIG가 로드되지 않았습니다. config.R을 먼저 로드해주세요: source('config.R')")
   }
   
+  # 공통 기본 프롬프트 사용 + 배치 모드 시 JSON 지시 추가
   base_instructions <- PROMPT_CONFIG$base_instructions
+  if (batch_mode) {
+    base_instructions <- paste0(base_instructions, PROMPT_CONFIG$batch_json_instruction)
+  }
+  
   comment_task <- PROMPT_CONFIG$comment_task
   post_task <- PROMPT_CONFIG$post_task
   context_header <- PROMPT_CONFIG$context_header
@@ -71,7 +76,7 @@ ensure_gemini_package <- function() {
   return(TRUE)
 }
 
-# 3. JSON 응답 파싱 함수
+# 3. 통합 JSON 응답 파싱 함수 (일반분석과 배치분석 공용)
 parse_emotion_json_internal <- function(json_text) {
   # JSON 정리
   response_clean <- gsub("```json\\s*|\\s*```", "", json_text, perl = TRUE)
@@ -83,31 +88,50 @@ parse_emotion_json_internal <- function(json_text) {
   # JSON 파싱
   parsed_data <- jsonlite::fromJSON(response_clean, flatten = TRUE)
   
-  # 필수 필드 확인
-  if (!all(c("emotion_scores", "PAD", "dominant_emotion", "rationale") %in% names(parsed_data))) {
-    stop("응답에 필수 필드가 없습니다")
+  # 통합 JSON 구조에 맞는 필수 필드 확인
+  if (!all(c("plutchik_emotions", "PAD", "dominant_emotion") %in% names(parsed_data))) {
+    stop("응답에 필수 필드가 없습니다. 필요: plutchik_emotions, PAD, dominant_emotion")
   }
   
-  emotion_scores <- parsed_data$emotion_scores
+  plutchik_emotions <- parsed_data$plutchik_emotions
   pad_scores <- parsed_data$PAD
   
-  # 결과 구조 생성
+  # 플루치크 8대 기본감정 추출
   result <- list(
-    기쁨 = as.numeric(emotion_scores[["기쁨"]] %||% NA_real_),
-    슬픔 = as.numeric(emotion_scores[["슬픔"]] %||% NA_real_),
-    분노 = as.numeric(emotion_scores[["분노"]] %||% NA_real_),
-    혐오 = as.numeric(emotion_scores[["혐오"]] %||% NA_real_),
-    공포 = as.numeric(emotion_scores[["공포"]] %||% NA_real_),
-    놀람 = as.numeric(emotion_scores[["놀람"]] %||% NA_real_),
-    `애정/사랑` = as.numeric(emotion_scores[["애정/사랑"]] %||% NA_real_),
-    중립 = as.numeric(emotion_scores[["중립"]] %||% NA_real_),
+    기쁨 = as.numeric(plutchik_emotions[["기쁨"]] %||% NA_real_),
+    신뢰 = as.numeric(plutchik_emotions[["신뢰"]] %||% NA_real_),
+    공포 = as.numeric(plutchik_emotions[["공포"]] %||% NA_real_),
+    놀람 = as.numeric(plutchik_emotions[["놀람"]] %||% NA_real_),
+    슬픔 = as.numeric(plutchik_emotions[["슬픔"]] %||% NA_real_),
+    혐오 = as.numeric(plutchik_emotions[["혐오"]] %||% NA_real_),
+    분노 = as.numeric(plutchik_emotions[["분노"]] %||% NA_real_),
+    기대 = as.numeric(plutchik_emotions[["기대"]] %||% NA_real_),
+    
+    # PAD 점수
     P = as.numeric(pad_scores[["P"]] %||% NA_real_),
     A = as.numeric(pad_scores[["A"]] %||% NA_real_),
     D = as.numeric(pad_scores[["D"]] %||% NA_real_),
-    PAD_complex_emotion = as.character(parsed_data$PAD_complex_emotion %||% NA_character_),
+    
+    # 기타 필드
     dominant_emotion = as.character(parsed_data$dominant_emotion %||% NA_character_),
-    rationale = as.character(parsed_data$rationale %||% NA_character_),
-    unexpected_emotions = as.character(parsed_data$unexpected_emotions %||% NA_character_),
+    complex_emotion = as.character(parsed_data$complex_emotion %||% NA_character_),
+    
+    # 추론 근거 (배치에서는 rationale 객체로 제공됨)
+    rationale = if (!is.null(parsed_data$rationale)) {
+      if (is.list(parsed_data$rationale)) {
+        # 배치 분석 - rationale이 객체인 경우
+        paste(
+          "감정점수:", parsed_data$rationale$emotion_scores %||% "",
+          "PAD분석:", parsed_data$rationale$PAD_analysis %||% "",
+          "복합감정:", parsed_data$rationale$complex_emotion_reasoning %||% "",
+          sep = " | "
+        )
+      } else {
+        # 일반 분석 - rationale이 문자열인 경우
+        as.character(parsed_data$rationale)
+      }
+    } else NA_character_,
+    
     error_message = NA_character_
   )
   
@@ -195,45 +219,15 @@ analyze_emotion_robust <- function(prompt_text,
         topP = top_p_to_use
       )
       
-      # gemini_structured 응답 정리 (가끔 ```json이 포함될 수 있음)
-      response_clean <- gsub("```json\\s*|\\s*```", "", response, perl = TRUE)
-      response_clean <- gsub("^\\s+|\\s+$", "", response_clean)
+      # 통합 파싱 함수 사용 (배치와 동일한 로직)
+      result <- parse_emotion_json_internal(response)
       
-      parsed_data <- jsonlite::fromJSON(response_clean, flatten = TRUE)
-      
-      # 데이터 추출 및 검증 (새로운 구조)
-      if (all(c("plutchik_emotions", "PAD", "dominant_emotion", "complex_emotion", "rationale") %in% names(parsed_data))) {
-        
-        plutchik_emotions <- parsed_data$plutchik_emotions
-        pad_scores <- parsed_data$PAD
-        rationale <- parsed_data$rationale
-        
-        # 플루치크 8대 기본감정 추출
-        output_df$기쁨 <- as.numeric(plutchik_emotions[["기쁨"]] %||% NA_real_)
-        output_df$신뢰 <- as.numeric(plutchik_emotions[["신뢰"]] %||% NA_real_)
-        output_df$공포 <- as.numeric(plutchik_emotions[["공포"]] %||% NA_real_)
-        output_df$놀람 <- as.numeric(plutchik_emotions[["놀람"]] %||% NA_real_)
-        output_df$슬픔 <- as.numeric(plutchik_emotions[["슬픔"]] %||% NA_real_)
-        output_df$혐오 <- as.numeric(plutchik_emotions[["혐오"]] %||% NA_real_)
-        output_df$분노 <- as.numeric(plutchik_emotions[["분노"]] %||% NA_real_)
-        output_df$기대 <- as.numeric(plutchik_emotions[["기대"]] %||% NA_real_)
-        
-        # PAD 점수 추출
-        output_df$P <- as.numeric(pad_scores[["P"]] %||% NA_real_)
-        output_df$A <- as.numeric(pad_scores[["A"]] %||% NA_real_)
-        output_df$D <- as.numeric(pad_scores[["D"]] %||% NA_real_)
-        
-        # 결과 및 근거 추출
-        output_df$dominant_emotion <- as.character(parsed_data$dominant_emotion %||% NA_character_)
-        output_df$complex_emotion <- as.character(parsed_data$complex_emotion %||% NA_character_)
-        output_df$emotion_scores_rationale <- as.character(rationale[["emotion_scores"]] %||% NA_character_)
-        output_df$PAD_analysis <- as.character(rationale[["PAD_analysis"]] %||% NA_character_)
-        output_df$complex_emotion_reasoning <- as.character(rationale[["complex_emotion_reasoning"]] %||% NA_character_)
-        
-        return(output_df)
-      } else {
-        stop("응답에 필수 필드가 없습니다")
+      # 오류가 있는 경우 예외 발생
+      if (!is.na(result$error_message)) {
+        stop(result$error_message)
       }
+      
+      return(result)
       
     }, error = function(e) {
       error_context <- substr(prompt_text, 1, 50)
@@ -407,9 +401,78 @@ extract_rationale <- function(text) {
   return(NA_character_)
 }
 
+# =============================================================================
+# 통합 JSON 파싱 함수 (일반 분석과 배치 분석 공통 사용)
+# =============================================================================
+parse_emotion_json_internal <- function(json_text) {
+  # 출력 구조 정의 (플루치크 8대 기본감정)
+  output_df <- data.frame(
+    기쁨 = NA_real_, 신뢰 = NA_real_, 공포 = NA_real_, 놀람 = NA_real_,
+    슬픔 = NA_real_, 혐오 = NA_real_, 분노 = NA_real_, 기대 = NA_real_,
+    P = NA_real_, A = NA_real_, D = NA_real_,
+    dominant_emotion = NA_character_,
+    complex_emotion = NA_character_,
+    emotion_scores_rationale = NA_character_,
+    PAD_analysis = NA_character_,
+    complex_emotion_reasoning = NA_character_,
+    error_message = NA_character_,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  tryCatch({
+    # JSON 정리 (마크다운 코드 블록 제거)
+    response_clean <- gsub("```json\\s*|\\s*```", "", json_text, perl = TRUE)
+    response_clean <- gsub("^\\s+|\\s+$", "", response_clean)
+    
+    parsed_data <- jsonlite::fromJSON(response_clean, flatten = TRUE)
+    
+    # 데이터 추출 및 검증 (통일된 구조)
+    if (all(c("plutchik_emotions", "PAD", "dominant_emotion", "complex_emotion", "rationale") %in% names(parsed_data))) {
+      
+      plutchik_emotions <- parsed_data$plutchik_emotions
+      pad_scores <- parsed_data$PAD
+      rationale <- parsed_data$rationale
+      
+      # 플루치크 8대 기본감정 추출
+      output_df$기쁨 <- as.numeric(plutchik_emotions[["기쁨"]] %||% NA_real_)
+      output_df$신뢰 <- as.numeric(plutchik_emotions[["신뢰"]] %||% NA_real_)
+      output_df$공포 <- as.numeric(plutchik_emotions[["공포"]] %||% NA_real_)
+      output_df$놀람 <- as.numeric(plutchik_emotions[["놀람"]] %||% NA_real_)
+      output_df$슬픔 <- as.numeric(plutchik_emotions[["슬픔"]] %||% NA_real_)
+      output_df$혐오 <- as.numeric(plutchik_emotions[["혐오"]] %||% NA_real_)
+      output_df$분노 <- as.numeric(plutchik_emotions[["분노"]] %||% NA_real_)
+      output_df$기대 <- as.numeric(plutchik_emotions[["기대"]] %||% NA_real_)
+      
+      # PAD 점수 추출
+      output_df$P <- as.numeric(pad_scores[["P"]] %||% NA_real_)
+      output_df$A <- as.numeric(pad_scores[["A"]] %||% NA_real_)
+      output_df$D <- as.numeric(pad_scores[["D"]] %||% NA_real_)
+      
+      # 결과 및 근거 추출
+      output_df$dominant_emotion <- as.character(parsed_data$dominant_emotion %||% NA_character_)
+      output_df$complex_emotion <- as.character(parsed_data$complex_emotion %||% NA_character_)
+      output_df$emotion_scores_rationale <- as.character(rationale[["emotion_scores"]] %||% NA_character_)
+      output_df$PAD_analysis <- as.character(rationale[["PAD_analysis"]] %||% NA_character_)
+      output_df$complex_emotion_reasoning <- as.character(rationale[["complex_emotion_reasoning"]] %||% NA_character_)
+      
+      return(output_df)
+    } else {
+      output_df$dominant_emotion <- "구조 오류"
+      output_df$error_message <- "응답에 필수 필드가 없습니다"
+      return(output_df)
+    }
+    
+  }, error = function(e) {
+    output_df$dominant_emotion <- "파싱 오류"
+    output_df$error_message <- paste("JSON 파싱 실패:", e$message)
+    return(output_df)
+  })
+}
+
 cat("✅ 통합 함수 파일 로드 완료\n")
 cat("📝 사용 가능한 함수:\n")
 cat("  - create_analysis_prompt(): 프롬프트 생성\n")
 cat("  - analyze_emotion_robust(): 감정분석 실행\n")
 cat("  - gemini_api_call(): 직접 API 호출\n")
-cat("  - parse_emotion_json(): JSON 파싱\n")
+cat("  - parse_emotion_json_internal(): 통합 JSON 파싱 (일반/배치 공통)\n")

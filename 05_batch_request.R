@@ -113,32 +113,52 @@ BatchRequestor <- R6Class("BatchRequestor",
       jsonl_lines <- vector("character", nrow(data))
       
       for (i in seq_len(nrow(data))) {
-        # 정확한 JSONL 배치 요청 형식
-        request_obj <- list(
-          contents = list(
-            list(
-              parts = list(
-                list(text = data$prompt[i])
+        # 기존 완성된 프롬프트 사용 + 배치용 JSON 지시만 추가
+        if ("prompt" %in% names(data) && !is.na(data$prompt[i])) {
+          # 01번 스크립트에서 생성된 완성 프롬프트 사용
+          base_prompt <- data$prompt[i]
+          batch_prompt <- paste0(base_prompt, PROMPT_CONFIG$batch_json_instruction)
+        } else {
+          # 폴백: 프롬프트가 없으면 새로 생성
+          batch_prompt <- create_analysis_prompt(
+            text = data$content[i],
+            구분 = data$구분[i],
+            title = if("title" %in% names(data)) data$title[i] else NULL,
+            context = if("context" %in% names(data)) data$context[i] else NULL,
+            context_title = if("context_title" %in% names(data)) data$context_title[i] else NULL,
+            batch_mode = TRUE  # 배치 모드 활성화
+          )
+        }
+        
+        # Google 공식 JSONL 형식: key + request 구조
+        # {"key": "request-1", "request": {...}}
+        jsonl_obj <- list(
+          key = sprintf("request-%d", i),
+          request = list(
+            contents = list(
+              list(
+                parts = list(
+                  list(text = batch_prompt)
+                )
               )
             )
-          ),
-          generation_config = list(
-            temperature = as.numeric(BATCH_CONFIG$temperature %||% 0.25),
-            topP = as.numeric(BATCH_CONFIG$top_p %||% 0.85)
           )
         )
         
-        # JSONL 라인 형식 (key + request)
-        batch_item <- list(
-          key = sprintf("request-%d", i),
-          request = request_obj
-        )
-        
-        jsonl_lines[i] <- jsonlite::toJSON(batch_item, auto_unbox = TRUE)
+        # JSONL 라인 형식: key + request 구조
+        jsonl_lines[i] <- jsonlite::toJSON(jsonl_obj, auto_unbox = TRUE)
       }
       
       # JSONL 파일 작성
       writeLines(jsonl_lines, file_path, useBytes = TRUE)
+      
+      # 디버깅: 생성된 JSONL 파일의 첫 몇 라인 확인
+      if (length(jsonl_lines) > 0) {
+        log_message("DEBUG", sprintf("JSONL 첫 번째 라인: %s", substr(jsonl_lines[1], 1, 200)))
+        if (length(jsonl_lines) > 1) {
+          log_message("DEBUG", sprintf("JSONL 두 번째 라인: %s", substr(jsonl_lines[2], 1, 200)))
+        }
+      }
       
       # 파일 크기 확인
       file_size_mb <- file.size(file_path) / (1024^2)
@@ -196,41 +216,39 @@ BatchRequestor <- R6Class("BatchRequestor",
         httr2::req_perform()
       
       upload_result <- httr2::resp_body_json(upload_response)
-      file_uri <- upload_result$file$uri  # URI 사용
+      full_uri <- upload_result$file$uri
       
-      log_message("INFO", sprintf("파일 업로드 완료: %s", file_uri))
-      return(file_uri)
+      # 파일 ID만 추출 (files/xxxxx 형식)
+      file_id <- sub(".*/(files/[^/]+).*", "\\1", full_uri)
+      if (!grepl("^files/", file_id)) {
+        # 경로에서 files/ 부분이 없으면 파일명만 추출하여 추가
+        file_name <- basename(full_uri)
+        file_id <- paste0("files/", file_name)
+      }
+      
+      log_message("INFO", sprintf("파일 업로드 완료: %s (ID: %s)", full_uri, file_id))
+      return(file_id)
     },
     
     # 3. 배치 작업 생성 및 제출
-    submit_batch_job = function(file_uri, batch_file, selected_mode, data_count) {
+    submit_batch_job = function(file_id, batch_file, selected_mode, data_count) {
       log_message("INFO", "배치 작업 생성 중...")
       
-      # 인라인 방식으로 배치 요청 생성
-      file_content <- readLines(batch_file, warn = FALSE)
-      inline_requests <- vector("list", length(file_content))
-      
-      for (i in seq_along(file_content)) {
-        if (file_content[i] != "") {
-          line_data <- jsonlite::fromJSON(file_content[i])
-          inline_requests[[i]] <- list(
-            request = line_data$request,
-            metadata = list(key = line_data$key)
-          )
-        }
-      }
-      
-      # 배치 요청 구조
+      # 파일 요청 방식으로 배치 요청 생성 (단순화된 형식)
       batch_request <- list(
         batch = list(
           display_name = sprintf("emotion_batch_%s", format(Sys.time(), "%Y%m%d_%H%M%S")),
           input_config = list(
-            requests = list(
-              requests = inline_requests
-            )
+            file_name = file_id  # 직접 파일 ID 사용
           )
         )
       )
+      
+      log_message("INFO", sprintf("파일 요청 방식 사용 - File ID: %s", file_id))
+      
+      # 디버깅: 전송할 JSON 로깅
+      batch_json <- jsonlite::toJSON(batch_request, auto_unbox = TRUE, pretty = TRUE)
+      log_message("DEBUG", sprintf("배치 요청 JSON:\n%s", batch_json))
       
       tryCatch({
         # 배치 엔드포인트
@@ -376,10 +394,10 @@ run_batch_request <- function(sample_mode = "ask") {
     requestor$create_batch_file(data_for_batch, batch_file)
     
     # 파일 업로드
-    file_uri <- requestor$upload_file(batch_file)
+    file_id <- requestor$upload_file(batch_file)
     
     # 배치 작업 생성 및 제출
-    batch_name <- requestor$submit_batch_job(file_uri, batch_file, selected_mode, nrow(data_for_batch))
+    batch_name <- requestor$submit_batch_job(file_id, batch_file, selected_mode, nrow(data_for_batch))
     
     return(list(
       batch_name = batch_name,

@@ -237,11 +237,29 @@ BatchMonitor <- R6Class("BatchMonitor",
       
       log_message("INFO", sprintf("배치 결과 다운로드 완료: %d개 응답", length(result_lines)))
       
+      # 배치 ID에서 파일명 생성
+      batch_id <- basename(responses_file)
+      timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+      
+      # 디스크에 원본 JSONL 저장
+      raw_file_path <- file.path("results", sprintf("batch_raw_%s_%s.jsonl", batch_id, timestamp))
+      if (!dir.exists("results")) {
+        dir.create("results", recursive = TRUE)
+      }
+      
+      writeLines(result_lines, raw_file_path)
+      log_message("INFO", sprintf("원본 JSONL 저장: %s", raw_file_path))
+      
       # 각 라인을 JSON으로 파싱
       results <- vector("list", length(result_lines))
       for (i in seq_along(result_lines)) {
         results[[i]] <- jsonlite::fromJSON(result_lines[i])
       }
+      
+      # 파싱된 결과도 RDS로 저장
+      parsed_file_path <- file.path("results", sprintf("batch_parsed_%s_%s.RDS", batch_id, timestamp))
+      saveRDS(results, parsed_file_path)
+      log_message("INFO", sprintf("파싱된 결과 저장: %s", parsed_file_path))
       
       return(results)
     },
@@ -503,6 +521,79 @@ BatchMonitor <- R6Class("BatchMonitor",
       log_message("INFO", "=== 배치 처리 종료 ===")
       
       return(final_df)
+    },
+    
+    # 저장된 배치 결과 파일 목록 조회
+    list_saved_batch_files = function() {
+      results_dir <- "results"
+      if (!dir.exists(results_dir)) {
+        log_message("WARNING", "results 디렉토리가 존재하지 않습니다")
+        return(data.frame())
+      }
+      
+      # 배치 결과 파일들 찾기
+      raw_files <- list.files(results_dir, pattern = "^batch_raw_.*\\.jsonl$", full.names = TRUE)
+      parsed_files <- list.files(results_dir, pattern = "^batch_parsed_.*\\.RDS$", full.names = TRUE)
+      
+      # 파일 정보 생성
+      file_info <- data.frame(
+        raw_file = raw_files,
+        parsed_file = parsed_files,
+        batch_id = sub("^batch_raw_(.*?)_\\d{8}_\\d{6}\\.jsonl$", "\\1", basename(raw_files)),
+        timestamp = sub("^batch_raw_.*_(\\d{8}_\\d{6})\\.jsonl$", "\\1", basename(raw_files)),
+        stringsAsFactors = FALSE
+      )
+      
+      return(file_info)
+    },
+    
+    # 저장된 배치 결과 로드
+    load_saved_batch_results = function(batch_id = NULL, timestamp = NULL, file_path = NULL) {
+      if (!is.null(file_path)) {
+        # 직접 파일 경로 지정된 경우
+        if (grepl("\\.jsonl$", file_path)) {
+          # JSONL 파일에서 로드
+          log_message("INFO", sprintf("JSONL 파일에서 결과 로드: %s", file_path))
+          result_lines <- readLines(file_path)
+          results <- vector("list", length(result_lines))
+          for (i in seq_along(result_lines)) {
+            results[[i]] <- jsonlite::fromJSON(result_lines[i])
+          }
+          return(results)
+        } else if (grepl("\\.RDS$", file_path)) {
+          # RDS 파일에서 로드
+          log_message("INFO", sprintf("RDS 파일에서 결과 로드: %s", file_path))
+          return(readRDS(file_path))
+        } else {
+          stop("지원하지 않는 파일 형식입니다. .jsonl 또는 .RDS 파일만 지원합니다.")
+        }
+      }
+      
+      # 배치 ID와 타임스탬프로 파일 찾기
+      file_info <- self$list_saved_batch_files()
+      
+      if (nrow(file_info) == 0) {
+        stop("저장된 배치 결과 파일이 없습니다")
+      }
+      
+      # 필터링
+      if (!is.null(batch_id)) {
+        file_info <- file_info[file_info$batch_id == batch_id, ]
+      }
+      
+      if (!is.null(timestamp)) {
+        file_info <- file_info[file_info$timestamp == timestamp, ]
+      }
+      
+      if (nrow(file_info) == 0) {
+        stop(sprintf("조건에 맞는 배치 결과 파일을 찾을 수 없습니다 (batch_id: %s, timestamp: %s)", batch_id %||% "전체", timestamp %||% "전체"))
+      }
+      
+      # 가장 최근 파일 선택
+      latest_file <- file_info[order(file_info$timestamp, decreasing = TRUE)[1], ]
+      
+      log_message("INFO", sprintf("배치 결과 로드: %s", latest_file$parsed_file))
+      return(readRDS(latest_file$parsed_file))
     }
   )
 )
@@ -658,7 +749,24 @@ interactive_batch_manager <- function() {
                  selected_job$batch_name, selected_job$mode, selected_job$count))
       
       tryCatch({
-        result <- monitor$process_completed_batch(selected_job$batch_name, selected_job$mode)
+        # Python 또는 R 방식으로 처리
+        result <- NULL
+        
+        # Python 배치 설정 확인 (config.R에서 로드)
+        use_python_batch <- if (exists("PYTHON_CONFIG") && !is.null(PYTHON_CONFIG$use_python_batch)) {
+          PYTHON_CONFIG$use_python_batch
+        } else {
+          FALSE  # 기본값: R 방식 사용
+        }
+        
+        if (use_python_batch && !is.null(selected_job$method) && selected_job$method == "python") {
+          # Python 배치 모니터링 시도
+          result <- monitor_python_batch(selected_job$batch_name, selected_job$mode)
+        } else {
+          # R 배치 처리
+          result <- monitor$process_completed_batch(selected_job$batch_name, selected_job$mode)
+        }
+        
         if (!is.null(result)) {
           cat("✅ 처리 완료!\n")
           
