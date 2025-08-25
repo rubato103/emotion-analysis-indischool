@@ -273,16 +273,18 @@ BatchMonitor <- R6Class("BatchMonitor",
       for (i in seq_along(results)) {
         result_item <- results[[i]]
         
-        # 요청 키로 원본 데이터 매칭
-        request_key <- result_item$metadata$key %||% result_item$key
+        # 요청 키로 원본 데이터 매칭 (배치 응답 구조에 맞게 수정)
+        request_key <- result_item$key %||% result_item$metadata$key %||% paste0("request-", i)
         row_index <- as.numeric(gsub("request-", "", request_key))
         
-        if (is.null(result_item$response)) {
+        # 배치 응답 구조 확인: result_item$response가 실제 API 응답
+        if (is.null(result_item$response) || is.null(result_item$response$candidates)) {
           # 오류 케이스
+          error_msg <- result_item$error$message %||% result_item$response$error$message %||% "알 수 없는 오류"
           parsed_results[[i]] <- list(
             row_index = row_index,
             dominant_emotion = "API 오류",
-            rationale = result_item$error$message %||% "알 수 없는 오류",
+            rationale = error_msg,
             기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
             슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
             P = NA, A = NA, D = NA,
@@ -290,16 +292,27 @@ BatchMonitor <- R6Class("BatchMonitor",
             emotion_scores_rationale = NA,
             PAD_analysis = NA,
             complex_emotion_reasoning = NA,
-            error_message = result_item$error$message %||% "알 수 없는 오류"
+            error_message = error_msg
           )
         } else {
           # 성공 케이스 - JSON 응답 파싱
-          response_text <- result_item$response$candidates[[1]]$content$parts[[1]]$text
-          
+          # 배치 응답 구조: result_item$response$candidates[[1]]$content$parts[[1]]$text
           tryCatch({
-            emotion_result <- self$parse_emotion_json(response_text)
-            emotion_result$row_index <- row_index
-            parsed_results[[i]] <- emotion_result
+            candidates <- result_item$response$candidates
+            if (length(candidates) > 0 && !is.null(candidates[[1]]$content$parts)) {
+              parts <- candidates[[1]]$content$parts
+              if (length(parts) > 0 && !is.null(parts[[1]]$text)) {
+                response_text <- parts[[1]]$text
+                
+                emotion_result <- self$parse_emotion_json(response_text)
+                emotion_result$row_index <- row_index
+                parsed_results[[i]] <- emotion_result
+              } else {
+                stop("응답에서 텍스트를 찾을 수 없습니다")
+              }
+            } else {
+              stop("응답에서 candidates를 찾을 수 없습니다")
+            }
           }, error = function(e) {
             parsed_results[[i]] <- list(
               row_index = row_index,
@@ -338,21 +351,65 @@ BatchMonitor <- R6Class("BatchMonitor",
       return(final_df)
     },
     
-    # 5. JSON 파싱 함수
+    # 5. JSON 파싱 함수 (배치 전용 최적화)
     parse_emotion_json = function(json_text) {
-      # functions.R의 기존 파싱 함수 사용
       tryCatch({
-        if (file.exists(PATHS$functions_file)) {
-          source(PATHS$functions_file, encoding = "UTF-8")
-          result <- parse_emotion_json_internal(json_text)
-          # dominant_emotion이 없는 경우 기본값 설정
-          if (is.null(result$dominant_emotion) || is.na(result$dominant_emotion)) {
-            result$dominant_emotion <- "파싱 오류"
-          }
+        # JSON 정리 (마크다운 코드 블록 제거)
+        response_clean <- gsub("```json\\s*|\\s*```", "", json_text, perl = TRUE)
+        response_clean <- gsub("^\\s+|\\s+$", "", response_clean)
+        
+        parsed_data <- jsonlite::fromJSON(response_clean, flatten = TRUE)
+        
+        # 데이터 추출 및 검증 (통일된 구조)
+        if (all(c("plutchik_emotions", "PAD", "dominant_emotion", "complex_emotion", "rationale") %in% names(parsed_data))) {
+          
+          plutchik_emotions <- parsed_data$plutchik_emotions
+          pad_scores <- parsed_data$PAD
+          rationale <- parsed_data$rationale
+          
+          # 결과 구조 생성
+          result <- list(
+            # 플루치크 8대 기본감정 추출
+            기쁨 = as.numeric(plutchik_emotions[["기쁨"]] %||% NA_real_),
+            신뢰 = as.numeric(plutchik_emotions[["신뢰"]] %||% NA_real_),
+            공포 = as.numeric(plutchik_emotions[["공포"]] %||% NA_real_),
+            놀람 = as.numeric(plutchik_emotions[["놀람"]] %||% NA_real_),
+            슬픔 = as.numeric(plutchik_emotions[["슬픔"]] %||% NA_real_),
+            혐오 = as.numeric(plutchik_emotions[["혐오"]] %||% NA_real_),
+            분노 = as.numeric(plutchik_emotions[["분노"]] %||% NA_real_),
+            기대 = as.numeric(plutchik_emotions[["기대"]] %||% NA_real_),
+            
+            # PAD 점수 추출
+            P = as.numeric(pad_scores[["P"]] %||% NA_real_),
+            A = as.numeric(pad_scores[["A"]] %||% NA_real_),
+            D = as.numeric(pad_scores[["D"]] %||% NA_real_),
+            
+            # 결과 및 근거 추출
+            dominant_emotion = as.character(parsed_data$dominant_emotion %||% NA_character_),
+            complex_emotion = as.character(parsed_data$complex_emotion %||% NA_character_),
+            emotion_scores_rationale = as.character(rationale[["emotion_scores"]] %||% NA_character_),
+            PAD_analysis = as.character(rationale[["PAD_analysis"]] %||% NA_character_),
+            complex_emotion_reasoning = as.character(rationale[["complex_emotion_reasoning"]] %||% NA_character_),
+            error_message = NA_character_
+          )
+          
           return(result)
         } else {
-          stop("functions.R 파일을 찾을 수 없습니다.")
+          # 필수 필드 누락
+          return(list(
+            dominant_emotion = "구조 오류",
+            rationale = "응답에 필수 필드가 없습니다",
+            기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
+            슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
+            P = NA, A = NA, D = NA,
+            complex_emotion = NA,
+            emotion_scores_rationale = NA,
+            PAD_analysis = NA,
+            complex_emotion_reasoning = NA,
+            error_message = "응답에 필수 필드가 없습니다"
+          ))
         }
+        
       }, error = function(e) {
         # 파싱 실패 시 기본 구조 반환
         log_message("ERROR", sprintf("JSON 파싱 실패: %s", e$message))
@@ -429,15 +486,12 @@ BatchMonitor <- R6Class("BatchMonitor",
         if (selected_mode %in% c("code_check", "pilot", "sampling", "full")) {
           raw_sample <- get_sample_for_mode(full_corpus_with_prompts, selected_mode)
         } else {
-          # 결과 개수만큼 빈 원본 데이터 생성
-          results_preview <- self$download_results(batch_status)
-          num_results <- length(results_preview)
-          
+          # 결과 개수만큼 빈 원본 데이터 생성 (나중에 results 길이에 맞춰 조정)
           raw_sample <- data.frame(
-            doc_id = paste0("batch_", gsub("batches/", "", batch_name), "_", 1:num_results),
-            content = rep("", num_results),
-            prompt = rep("", num_results),
-            구분 = rep("배치처리", num_results),
+            doc_id = character(0),
+            content = character(0),
+            prompt = character(0),
+            구분 = character(0),
             stringsAsFactors = FALSE
           )
         }
@@ -463,21 +517,62 @@ BatchMonitor <- R6Class("BatchMonitor",
           select(-content_cleaned)
           
       } else {
-        # 폴백: 간단한 원본 데이터 구조 생성
-        results_preview <- self$download_results(batch_status)
-        num_results <- length(results_preview)
-        
+        # 폴백: 빈 원본 데이터 (나중에 results에 맞춰 생성)
         original_data <- data.frame(
-          doc_id = paste0("batch_", gsub("batches/", "", batch_name), "_", 1:num_results),
-          content = rep("", num_results),
-          prompt = rep("", num_results),
-          구분 = rep("배치처리", num_results),
+          doc_id = character(0),
+          content = character(0),
+          prompt = character(0),
+          구분 = character(0),
           stringsAsFactors = FALSE
         )
       }
       
       # 결과 다운로드
       results <- self$download_results(batch_status)
+      
+      # 원본 데이터를 실제 배치 결과 개수에 맞춰 조정
+      if (nrow(original_data) != length(results)) {
+        if (nrow(original_data) > length(results)) {
+          # 원본 데이터가 더 많으면 결과 개수에 맞춰 제한
+          log_message("INFO", sprintf("원본 데이터를 %d건에서 %d건으로 제한합니다", 
+                                     nrow(original_data), length(results)))
+          original_data <- original_data[1:length(results), ]
+        } else if (nrow(original_data) < length(results)) {
+          # 원본 데이터가 부족하면 빈 데이터로 채움
+          log_message("INFO", sprintf("원본 데이터를 %d건에서 %d건으로 확장합니다", 
+                                     nrow(original_data), length(results)))
+          additional_rows <- length(results) - nrow(original_data)
+          
+          # 원본 데이터와 동일한 컬럼 구조 유지
+          if (nrow(original_data) > 0) {
+            # 기존 데이터 구조를 복사하여 빈 행 생성
+            template_row <- original_data[1, ]
+            additional_data <- template_row[rep(1, additional_rows), ]
+            
+            # 기본값 설정
+            additional_data$doc_id <- paste0("batch_", gsub("batches/", "", batch_name), "_", 
+                                            (nrow(original_data)+1):length(results))
+            additional_data$content <- ""
+            additional_data$prompt <- ""
+            additional_data$구분 <- "배치처리"
+            additional_data$post_id <- NA
+            additional_data$comment_id <- NA
+          } else {
+            # 완전히 빈 경우 최소 구조 생성
+            additional_data <- data.frame(
+              doc_id = paste0("batch_", gsub("batches/", "", batch_name), "_", 1:additional_rows),
+              post_id = rep(NA, additional_rows),
+              comment_id = rep(NA, additional_rows),
+              content = rep("", additional_rows),
+              prompt = rep("", additional_rows),
+              구분 = rep("배치처리", additional_rows),
+              stringsAsFactors = FALSE
+            )
+          }
+          
+          original_data <- rbind(original_data, additional_data)
+        }
+      }
       
       # 결과 파싱
       final_df <- self$parse_batch_results(results, original_data)
