@@ -1,27 +1,36 @@
 # 초등교사 커뮤니티 감정분석 시스템
 
-초등교사 커뮤니티 텍스트 데이터에 대한 **플루치크 8대 감정** 및 **PAD 모델** 기반 고급 감정분석 파이프라인
+초등교사 커뮤니티 텍스트 데이터에 대한 **플루치크 8대 기본감정** 및 **PAD 모델** 기반 고급 감정분석 파이프라인
 
 [![R](https://img.shields.io/badge/R-4.5.1+-blue.svg)](https://www.r-project.org/)
-[![Gemini AI](https://img.shields.io/badge/Gemini-2.5%20Flash%20Lite-orange.svg)](https://ai.google.dev/)
+[![Gemini AI](https://img.shields.io/badge/Gemini-2.5%20Flash-orange.svg)](https://ai.google.dev/)
 [![License](https://img.shields.io/badge/License-Academic%20Research%20Only-red.svg)](LICENSE)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-blue.svg)](https://github.com/rubato103/emotion-analysis-indischool)
 
+> **🚀 최신 업데이트 (2025.08.26)**
+> - 배치 처리 시스템 완전 안정화 및 JSON 파싱 최적화 ✅
+> - Windows R 실행 환경 개선 (PowerShell 기반) ✅  
+> - 플루치크 8대 기본감정 + PAD 모델 통합 지원 ✅
+> - Python 배치 처리 통합 및 R 폴백 시스템 구축 ✅
+> - 통합 설정 관리 시스템 (config.R) 중앙화 ✅
+
 ## 주요 특징
 
-### 고도화된 감정분석 모델
-- **플루치크 8대 감정**: 기쁨↔슬픔, 신뢰↔혐오, 공포↔분노, 놀람↔기대
-- **PAD 3차원 모델**: Pleasure(긍정성), Arousal(활성화), Dominance(통제감)
+### 🎭 고도화된 감정분석 모델
+- **플루치크 8대 기본감정**: 기쁨↔슬픔, 신뢰↔혐오, 공포↔분노, 놀람↔기대
+- **PAD 3차원 모델**: Pleasure(긍정성), Arousal(활성화), Dominance(외적 통제감)
 - **복합감정 추론**: 다중 감정의 조합으로 미묘한 감정 상태 분석
 - **맥락 인식**: 원본 게시글과 댓글의 상호작용 맥락 고려
+- **구조화된 출력**: JSON 기반 정형화된 분석 결과
 
-### 확장 가능한 처리 아키텍처
-- **적응형 샘플링**: 목표 크기 자동 달성 및 게시글-댓글 맥락 보존
+### ⚡ 확장 가능한 처리 아키텍처  
 - **배치 처리**: Gemini API 배치 모드로 대규모 데이터 효율적 처리 (50% 비용 절감)
-- **병렬 처리**: 멀티코어 활용으로 분석 속도 향상
+- **적응형 샘플링**: 목표 크기 자동 달성 및 게시글-댓글 맥락 보존
+- **통합 파싱 시스템**: 일반분석과 배치분석 공통 JSON 파싱 로직
 - **자동 복구**: 실패 시 중단점부터 재개
+- **Windows 최적화**: PowerShell 기반 안정적인 R 실행환경
 
-### 신뢰도 검증 시스템
+### 🔬 신뢰도 검증 시스템
 - **인간 코더 비교**: 4명 코더 대상 자동 구글 시트 생성
 - **Krippendorff's Alpha**: 코더간 신뢰도 통계 분석
 - **품질 보증**: 실시간 결과 검증 및 오류 탐지
@@ -31,11 +40,18 @@
 ### 1. 환경 설정
 ```r
 # R 환경 및 패키지 자동 설치
-source("00_setup_r_environment.R")
+source("setup/install_packages.R")
 ```
 
 ### 2. API 키 설정 (시스템 환경변수 권장)
 **자세한 설정 가이드**: [`GEMINI_API_SETUP.md`](GEMINI_API_SETUP.md) 참조
+
+**API 키 확인 방법**:
+```r
+# 환경변수 설정 상태 확인
+source("libs/config.R")
+cat("API 키 설정:", if(Sys.getenv("GEMINI_API_KEY") != "") "✅ 정상" else "❌ 미설정", "\n")
+```
 
 **Windows (권장 방법)**:
 1. 시작 메뉴 → "환경 변수" 검색
@@ -77,16 +93,19 @@ source("03_full_emotion_analysis.R")
 # 1. 배치 요청 생성 및 제출
 source("05_batch_request.R")
 # → JSONL 파일 생성 및 Gemini API 배치 제출
+# → Python 배치 처리 시도 → R 폴백 시스템
 
 # 2. 배치 상태 모니터링 및 결과 처리
 source("06_batch_monitor.R") 
 # → 자동 상태 확인, 완료 시 결과 다운로드 및 파싱
+# → 통합 JSON 파싱 시스템으로 안정적 결과 처리
 ```
 
 ### 신뢰도 검증 워크플로우
 ```r
 # 인간 코더간 신뢰도 분석 (Krippendorff's Alpha)
-source("05_reliability_analysis.R")
+source("04_reliability_analysis.R")
+# → 4명 코더 체크박스 시트 자동 생성 및 분석
 ```
 
 ## 📁 프로젝트 구조
@@ -99,8 +118,8 @@ emotion-analysis-indischool/
 ├── results/                 # 분석 결과 (RDS + CSV + 구글시트)
 ├── logs/                    # 상세 실행 로그
 ├── libs/                    # 핵심 라이브러리
-│   ├── config.R                # 통합 설정 관리
-│   ├── functions.R             # 감정분석 핵심 함수
+│   ├── config.R                # 통합 설정 관리 (PROMPT_CONFIG, API_CONFIG, BATCH_CONFIG, PYTHON_CONFIG)
+│   ├── functions.R             # 감정분석 핵심 함수 (통합 JSON 파싱)
 │   └── utils.R                 # 범용 유틸리티 함수
 ├── modules/                 # 기능별 모듈
 │   ├── adaptive_sampling.R     # 적응형 샘플링 엔진
@@ -114,33 +133,47 @@ emotion-analysis-indischool/
 │   └── test_prompt_consistency.R  # 프롬프트 일관성 검증
 ├── archive/                 # 버전 관리 및 백업
 └── 주요 스크립트/
-    ├── 00_setup_r_environment.R     # 환경 초기화
     ├── 01_data_loading_and_prompt_generation.R  # 데이터 전처리
     ├── 02_single_analysis_test.R    # API 연결 테스트
     ├── 03_full_emotion_analysis.R   # 일반 분석 (실시간)
-    ├── 05_batch_request.R           # 배치 요청 생성
-    ├── 05_reliability_analysis.R    # 신뢰도 검증
-    └── 06_batch_monitor.R           # 배치 모니터링
+    ├── 04_reliability_analysis.R    # 신뢰도 검증 (Krippendorff's Alpha)
+    ├── 05_batch_request.R           # 배치 요청 생성 (Python/R 통합)
+    └── 06_batch_monitor.R           # 배치 모니터링 (안정화된 파싱)
 ```
 
 ## 핵심 설정
 
-### 프롬프트 설정 (`libs/config.R`)
+### 통합 설정 관리 (`libs/config.R`)
 ```r
+# 프롬프트 설정 (감정분석 지시사항)
 PROMPT_CONFIG <- list(
-  base_instructions = '역할: 리서치 보조원, 대상: 초등교사 커뮤니티...',
+  base_instructions = '## 역할: 리서치 보조원\n## 대상: 초등교사 커뮤니티 텍스트...',
+  batch_json_instruction = '\n\n## 중요: 응답은 반드시 유효한 JSON 형식으로만 출력하세요...',
   comment_task = '원본 게시글 맥락을 고려하여 댓글의 감정을 분석',
   # 모든 프롬프트를 중앙에서 관리
 )
+
+# Python 배치 처리 설정
+PYTHON_CONFIG <- list(
+  use_python_batch = FALSE,         # 기본값: R 방식 사용
+  fallback_to_r = TRUE              # Python 실패 시 R로 폴백
+)
 ```
 
-### API 및 분석 설정
+### API 및 배치 설정  
 ```r
 API_CONFIG <- list(
-  model_name = "2.5-flash-lite",     # Gemini 2.5 Flash Lite
-  temperature = 1.0,
-  rate_limit_per_minute = 1000,
-  batch_enabled = TRUE               # 배치 처리 활성화
+  model_name = "2.5-flash",          # gemini.R 패키지 호환
+  temperature = 0.25,                # 낮은 온도로 일관성 향상
+  top_p = 0.85,
+  rate_limit_per_minute = 3900       # 안정적 속도 제한
+)
+
+BATCH_CONFIG <- list(
+  model_name = "gemini-2.5-flash",   # 배치 모드 지원 모델
+  max_batch_size = 100000,           # 배치당 최대 요청 수
+  auto_retry_failed = TRUE,          # 실패 시 자동 재시도
+  auto_download_results = TRUE       # 완료 시 자동 다운로드
 )
 
 ANALYSIS_CONFIG <- list(
@@ -287,6 +320,9 @@ Sys.setenv(GEMINI_API_KEY = "your_api_key_here")
 # libs/config.R에서 샘플 크기 조정
 ANALYSIS_CONFIG$sample_post_count <- 3      # 파일럿 모드 게시글 수 감소
 ANALYSIS_CONFIG$target_sample_size <- 100   # 표본 분석 목표 크기 감소
+
+# 배치 크기 조정
+BATCH_CONFIG$max_batch_size <- 1000         # 배치 크기 감소
 ```
 
 #### 3. 패키지 설치 문제
@@ -310,6 +346,11 @@ googledrive::drive_auth()
 # 배치 상태 수동 확인
 source("06_batch_monitor.R")
 read_batch_jobs()  # 현재 배치 작업 확인
+
+# Python 배치 실패 시 R 폴백 설정 확인
+source("libs/config.R")
+cat("Python 배치:", PYTHON_CONFIG$use_python_batch, 
+    "| R 폴백:", PYTHON_CONFIG$fallback_to_r, "\n")
 ```
 
 ### 로그 및 디버깅
@@ -321,7 +362,12 @@ LOG_CONFIG$log_level <- "DEBUG"  # ERROR|WARN|INFO|DEBUG
 file.show("logs/analysis.log")
 
 # 중간 결과 확인
-list.files("checkpoints/", pattern = "\\.RDS$")
+list.files("results/", pattern = "analysis_results.*\\.RDS$")
+list.files("results/", pattern = "batch_parsed.*\\.RDS$")
+
+# 현재 배치 작업 상태
+source("06_batch_monitor.R")
+read_batch_jobs()
 ```
 
 ## 📞 지원 및 문의
@@ -370,6 +416,28 @@ Gemini 2.5 Flash Lite API 활용. GitHub Repository.
 - AI 모델의 특성상 완벽한 분석을 보장하지 않습니다  
 - 사용자는 결과 해석 시 충분한 검토와 검증을 거쳐야 합니다
 
+## 📈 최근 개선사항 (2025.08.26)
+
+### 🔧 시스템 안정화
+- **Windows R 실행 환경**: PowerShell 기반으로 변경하여 Segmentation fault 오류 해결
+- **통합 JSON 파싱**: 일반분석과 배치분석 공통 파싱 로직으로 통합하여 일관성 보장  
+- **Python 배치 통합**: Python 배치 처리 시도 → R 폴백 시스템으로 안정성 향상
+- **설정 중앙화**: 모든 설정을 `libs/config.R`에서 통합 관리
+
+### ⚡ 성능 최적화
+- **배치 처리**: 대용량 데이터 처리 시 50% 비용 절감 효과
+- **토큰 효율성**: 프롬프트 최적화로 API 호출 비용 감소
+- **자동 복구**: 실패 지점 자동 감지 및 재개 시스템
+
+### 📊 품질 향상
+- **JSON 구조 통일**: 모든 출력 형식을 일관된 JSON 스키마로 표준화
+- **오류 처리 강화**: 다양한 응답 형식에 대한 견고한 파싱 로직
+- **검증 시스템**: 결과 품질 자동 검증 및 이상치 탐지
+
 ---
 
-**팁**: 첫 사용 시 `코드 점검` 모드로 API 연결을 확인한 후, `파일럿 연구`로 소규모 테스트를 거쳐 본격적인 분석을 시작하세요.
+**🚀 사용 팁**: 
+- 첫 사용: `코드 점검` 모드로 API 연결 확인
+- 소규모 테스트: `파일럿 연구` 모드로 5개 게시글 분석  
+- 본격 분석: `표본 분석` 또는 `배치 처리` 모드 선택
+- 문제 발생 시: `logs/analysis.log` 파일과 현재 배치 상태 확인
