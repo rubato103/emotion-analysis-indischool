@@ -83,159 +83,43 @@ for (i in 1:nrow(sheet_info)) {
       stop(sprintf("시트 URL에서 ID 추출 실패: %s", sheet_url))
     }
     
-    # coding_data 시트에서 데이터 읽기
     raw_data <- read_sheet(sheet_id, sheet = "coding_data")
     log_message("INFO", sprintf("%s 원시 데이터 로드: %d행 × %d열", coder_name, nrow(raw_data), ncol(raw_data)))
     
-    # 데이터 구조 분석
-    available_cols <- names(raw_data)
-    log_message("INFO", sprintf("%s 시트 컬럼: %s", coder_name, paste(available_cols, collapse = ", ")))
+    # --- START of new robust logic ---
+    # 1. Create unique_id
+    if (!"post_id" %in% names(raw_data)) {
+        stop("필수 컬럼 'post_id'를 찾을 수 없습니다.")
+    }
+    raw_data$unique_id <- as.character(raw_data$post_id)
+    if ("comment_id" %in% names(raw_data)) {
+        comment_rows <- !is.na(raw_data$comment_id) & raw_data$comment_id != ""
+        raw_data$unique_id[comment_rows] <- paste(raw_data$post_id[comment_rows], raw_data$comment_id[comment_rows], sep = "_")
+    }
+
+    # 2. Find the human_agree column robustly
+    agree_col_name_actual <- grep("^human_agree", names(raw_data), value = TRUE)
     
-    # post_id와 comment_id 컬럼 확인
-    post_id_col <- intersect(available_cols, c("post_id", "게시글ID", "게시글_ID"))[1]
-    comment_id_col <- intersect(available_cols, c("comment_id", "댓글ID", "댓글_ID"))[1]
-    general_id_col <- intersect(available_cols, c("row_id", "id", "ID"))[1]
-    
-    cat(sprintf("    컬럼 매핑: post_id=%s, comment_id=%s, general_id=%s\n", 
-                ifelse(is.na(post_id_col), "없음", post_id_col),
-                ifelse(is.na(comment_id_col), "없음", comment_id_col),
-                ifelse(is.na(general_id_col), "없음", general_id_col)))
-    
-    # 고유 식별자 생성 로직
-    if (!is.na(post_id_col) && !is.na(comment_id_col)) {
-      # post_id와 comment_id가 모두 있는 경우
-      cat("    데이터 구조: 게시글+댓글 구조 감지\n")
-      
-      coder_data <- raw_data %>%
-        mutate(
-          # 고유 ID 생성: 댓글이 있으면 "post_id_comment_id", 없으면 "post_id"
-          unique_id = ifelse(
-            is.na(.data[[comment_id_col]]) | .data[[comment_id_col]] == "",
-            as.character(.data[[post_id_col]]),
-            paste(.data[[post_id_col]], .data[[comment_id_col]], sep = "_")
-          )
-        ) %>%
-        select(
-          unique_id,
-          any_of(c("human_agree")),
-          any_of(c("human_emotion", "notes", "confidence_level"))
-        ) %>%
-        rename(post_id = unique_id) %>%
-        # 컬럼명에 코더 이름 추가 (post_id 제외)
-        rename_with(~ paste0(coder_name, "_", .), -post_id)
-      
-      # 데이터 구조 확인
-      sample_ids <- head(coder_data$post_id, 3)
-      cat(sprintf("    샘플 ID: %s\n", paste(sample_ids, collapse = ", ")))
-      
-    } else if (!is.na(post_id_col)) {
-      # post_id만 있는 경우
-      cat("    데이터 구조: post_id만 사용\n")
-      
-      coder_data <- raw_data %>%
-        select(
-          all_of(post_id_col),
-          any_of(c("human_agree")),
-          any_of(c("human_emotion", "notes", "confidence_level"))
-        ) %>%
-        rename(post_id = all_of(post_id_col)) %>%
-        # 컬럼명에 코더 이름 추가 (post_id 제외)
-        rename_with(~ paste0(coder_name, "_", .), -post_id)
-        
-    } else if (!is.na(general_id_col)) {
-      # 일반 ID 컬럼 사용
-      cat("    데이터 구조: 일반 ID 컬럼 사용\n")
-      
-      coder_data <- raw_data %>%
-        select(
-          all_of(general_id_col),
-          any_of(c("human_agree")),
-          any_of(c("human_emotion", "notes", "confidence_level"))
-        ) %>%
-        rename(post_id = all_of(general_id_col)) %>%
-        # 컬럼명에 코더 이름 추가 (post_id 제외)
-        rename_with(~ paste0(coder_name, "_", .), -post_id)
-        
-    } else {
-      # ID 컬럼이 없는 경우 - 첫 번째 컬럼 사용
-      cat("    데이터 구조: 첫 번째 컬럼을 ID로 사용\n")
-      log_message("WARN", sprintf("%s: 적절한 ID 컬럼을 찾을 수 없어 첫 번째 컬럼을 사용합니다.", coder_name))
-      
-      coder_data <- raw_data %>%
-        select(
-          all_of(available_cols[1]),
-          any_of(c("human_agree")),
-          any_of(c("human_emotion", "notes", "confidence_level"))
-        ) %>%
-        rename(post_id = all_of(available_cols[1])) %>%
-        # 컬럼명에 코더 이름 추가 (post_id 제외)
-        rename_with(~ paste0(coder_name, "_", .), -post_id)
+    if (length(agree_col_name_actual) == 0) {
+        stop("'human_agree'로 시작하는 컬럼을 찾을 수 없습니다.")
     }
     
+    # 3. Select and rename robustly
+    coder_data <- raw_data %>%
+        select(
+            unique_id,
+            all_of(agree_col_name_actual)
+        ) %>%
+        rename(
+            post_id = unique_id,
+            human_agree_value = all_of(agree_col_name_actual)
+        ) %>% 
+        rename_with(~ paste0(coder_name, "_", .), -post_id)
+    # --- END of new robust logic ---
+
     coder_data_list[[coder_name]] <- coder_data
-    
-    # 데이터 구조 상세 분석
-    cat(sprintf("    최종 데이터: %d행, post_id 형식 확인...\n", nrow(coder_data)))
-    
-    # post_id 구조 분석
-    sample_post_ids <- head(unique(coder_data$post_id), 5)
-    cat("    샘플 post_id:\n")
-    for (pid in sample_post_ids) {
-      pid_str <- as.character(pid)
-      if (grepl("_", pid_str)) {
-        parts <- strsplit(pid_str, "_")[[1]]
-        cat(sprintf("      %s (게시글: %s, 댓글: %s)\n", pid_str, parts[1], 
-                    ifelse(length(parts) > 1, parts[2], "없음")))
-      } else {
-        cat(sprintf("      %s (게시글만)\n", pid_str))
-      }
-    }
-    
-    # human_agree 컬럼 존재 확인 및 동의율 체크
-    agree_col <- paste0(coder_name, "_human_agree")
-    if (agree_col %in% names(coder_data)) {
-      # 체크박스 값을 논리형으로 변환
-      agree_values <- coder_data[[agree_col]]
-      
-      # TRUE/FALSE, 1/0, "TRUE"/"FALSE" 등 다양한 형태 처리하여 논리형으로 통일
-      if (is.character(agree_values)) {
-        agree_values <- toupper(trimws(agree_values))
-        normalized_values <- case_when(
-          agree_values %in% c("TRUE", "T", "1", "YES", "Y") ~ TRUE,
-          agree_values %in% c("FALSE", "F", "0", "NO", "N") ~ FALSE,
-          TRUE ~ NA
-        )
-      } else if (is.numeric(agree_values)) {
-        normalized_values <- case_when(
-          agree_values == 1 ~ TRUE,
-          agree_values == 0 ~ FALSE,
-          TRUE ~ NA
-        )
-      } else if (is.logical(agree_values)) {
-        normalized_values <- agree_values
-      } else {
-        normalized_values <- rep(NA, length(agree_values))
-      }
-      
-      # 동의율 계산 (체크박스가 TRUE인 비율)
-      valid_responses <- sum(!is.na(normalized_values))
-      agreement_count <- sum(normalized_values == TRUE, na.rm = TRUE)
-      agreement_rate <- if (valid_responses > 0) agreement_count / valid_responses else 0
-      
-      cat(sprintf("  ✅ %s 응답: %d개, 동의: %d개 (%.1f%%)\n", 
-                  coder_name, valid_responses, agreement_count, agreement_rate * 100))
-      
-      if (valid_responses == 0) {
-        cat(sprintf("  ⏳ %s: 작업 미완료 (체크박스 응답 없음)\n", coder_name))
-        log_message("WARN", sprintf("%s: 작업 미완료", coder_name))
-      }
-    } else {
-      cat(sprintf("  ❌ %s: human_agree 컬럼을 찾을 수 없습니다.\n", coder_name))
-      log_message("WARN", sprintf("%s: human_agree 컬럼이 없습니다.", coder_name))
-    }
-    
     log_message("INFO", sprintf("%s 데이터 수집 완료", coder_name))
-    
+
   }, error = function(e) {
     error_msg <- sprintf("%s 데이터 수집 실패: %s", coder_name, e$message)
     cat(sprintf("  ❌ %s\n", error_msg))
@@ -417,6 +301,7 @@ cat(sprintf("📊 발견된 동의 컬럼: %s\n", paste(agree_cols, collapse = "
 
 # Krippendorff's Alpha 계산을 위한 데이터 준비
 prepare_alpha_data <- function(merged_data, column_pattern) {
+
   # 해당 패턴의 컬럼들만 추출
   cols <- grep(column_pattern, names(merged_data), value = TRUE)
   
@@ -488,7 +373,7 @@ calculate_krippendorff_alpha <- function(data_matrix, level = "nominal") {
     
     # irr 패키지의 kripp.alpha 함수 사용
     cat("  🧮 Alpha 값 계산 중...\n")
-    result <- kripp.alpha(transposed_data, method = level)
+    result <- suppressWarnings(kripp.alpha(transposed_data, method = level))
     alpha_value <- result$value
     
     # 계산 완료 시간
@@ -523,12 +408,14 @@ calculate_krippendorff_alpha <- function(data_matrix, level = "nominal") {
 }
 
 # 신뢰도 분석 실행
-cat("\n🔬 Krippendorff's Alpha 신뢰도 분석을 시작합니다...\n")
+cat("
+🔬 Krippendorff's Alpha 신뢰도 분석을 시작합니다...\n")
 log_message("INFO", "신뢰도 분석 시작")
 
 # 동의/비동의 신뢰도 계산
-cat("\n📋 AI 분석 동의/비동의 일치도 계산 중...\n")
-agreement_data <- prepare_alpha_data(merged_data, "_human_agree$")
+cat("
+📋 AI 분석 동의/비동의 일치도 계산 중...\n")
+agreement_data <- prepare_alpha_data(merged_data, "_human_agree_value")
 
 if (nrow(agreement_data) == 0) {
   log_message("ERROR", "분석할 동의/비동의 데이터가 없습니다.")
@@ -546,7 +433,8 @@ reliability_results <- list(
 )
 
 # 결과 출력
-cat("\n")
+cat("
+")
 cat(paste(rep("=", 65), collapse = ""), "\n")
 cat("                 인간 코더 신뢰도 분석 결과\n")
 cat(paste(rep("=", 65), collapse = ""), "\n")
@@ -556,7 +444,8 @@ cat(sprintf("👥 참여 코더: %d명 (%s)\n",
             reliability_results$total_coders,
             paste(reliability_results$coder_names, collapse = ", ")))
 
-cat("\n🎯 신뢰도 분석 결과:\n")
+cat("
+🎯 신뢰도 분석 결과:\n")
 alpha_value <- reliability_results$agreement$alpha %||% 0
 interpretation <- reliability_results$agreement$interpretation %||% "분석 실패"
 
@@ -578,14 +467,16 @@ if (!is.na(alpha_value) && is.numeric(alpha_value)) {
 }
 
 # 해석 가이드
-cat("\n📚 Krippendorff's Alpha 해석 가이드:\n")
+cat("
+📚 Krippendorff's Alpha 해석 가이드:\n")
 cat("  • α ≥ 0.800: 매우 높은 신뢰도 (Excellent) - 결과 신뢰 가능\n")
 cat("  • α ≥ 0.667: 높은 신뢰도 (Good) - 결과 사용 가능\n") 
 cat("  • α ≥ 0.500: 중간 신뢰도 (Moderate) - 주의해서 해석\n")
 cat("  • α < 0.500: 낮은 신뢰도 (Poor) - 추가 훈련 또는 재분석 필요\n")
 
 # 결과 파일 저장
-cat("\n💾 결과 파일 저장 중...\n")
+cat("
+💾 결과 파일 저장 중...\n")
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 sample_label <- gsub("human_coding_info_|\\.csv", "", basename(selected_info_file))
 
@@ -632,18 +523,20 @@ cat(sprintf("  📊 상세 결과: %s\n", basename(reliability_file)))
 cat(sprintf("  📈 요약 결과: %s\n", basename(summary_file)))
 cat(sprintf("  📄 원시 데이터: %s\n", basename(raw_data_file)))
 
-cat("\n✨ 신뢰도 분석이 완료되었습니다!\n")
+cat("
+✨ 신뢰도 분석이 완료되었습니다!\n")
 cat("🔍 요약 CSV 파일을 열어서 결과를 확인하거나,\n")
 cat("📊 상세 RDS 파일을 R에서 불러와서 추가 분석을 수행할 수 있습니다.\n")
 
 log_message("INFO", "=== 인간 코더 신뢰도 분석 완료 ===")
 
-# AI 분석 정확도 판정 (동의 수 기준)
-cat("\n🎯 AI 분석 정확도 평가:\n")
+# AI 분석 정확도 평가
+cat("
+🎯 AI 분석 정확도 평가:\n")
 cat("판정 기준: 3명 이상 동의=정답, 2명=모호함, 1명 이하=오답\n\n")
 
 if (nrow(merged_data) > 0) {
-  agreement_cols <- grep("_human_agree$", names(merged_data), value = TRUE)
+  agreement_cols <- grep("_human_agree_value", names(merged_data), value = TRUE)
   
   if (length(agreement_cols) > 0) {
     cat(sprintf("🔄 정확도 판정 시작... (%d개 항목, %d명 코더)\n", 
@@ -657,7 +550,7 @@ if (nrow(merged_data) > 0) {
     for (i in seq_along(agreement_cols)) {
       col <- agreement_cols[i]
       cat(sprintf("    처리 중: %s (%d/%d)\n", 
-                  gsub("_human_agree$", "", col), i, length(agreement_cols)))
+                  gsub("_human_agree_value", "", col), i, length(agreement_cols)))
       
       values <- merged_data[[col]]
       if (is.character(values)) {
@@ -701,7 +594,7 @@ if (nrow(merged_data) > 0) {
     # 정확도 통계 계산
     cat("  📈 통계 요약 계산 중...\n")
     accuracy_summary <- merged_data_with_judgment %>%
-      filter(response_count > 0) %>%  # 응답이 있는 항목만
+      filter(response_count > 0) %>%
       count(ai_accuracy) %>%
       mutate(percentage = round(n / sum(n) * 100, 1))
     
@@ -734,7 +627,7 @@ if (nrow(merged_data) > 0) {
     # 코더별 동의율 요약
     cat("\n👥 코더별 동의율:\n")
     for (col in agreement_cols) {
-      coder_name <- gsub("_human_agree$", "", col)
+      coder_name <- gsub("_human_agree_value", "", col)
       agree_count <- sum(merged_data_with_judgment[[col]] == TRUE, na.rm = TRUE)
       total_responses <- sum(!is.na(merged_data_with_judgment[[col]]))
       agree_rate <- if (total_responses > 0) round(agree_count / total_responses * 100, 1) else 0
@@ -773,3 +666,58 @@ if (!is.na(alpha_val) && is.numeric(alpha_val)) {
 cat(paste(rep("=", 65), collapse = ""), "\n")
 cat("📁 파일 저장 및 완료 안내\n")
 cat(paste(rep("=", 65), collapse = ""), "\n")
+
+# Krippendorff's Alpha 계산 (irr 패키지 사용)
+calculate_krippendorff_alpha <- function(data_matrix, level = "nominal") {
+  
+  if (nrow(data_matrix) == 0) {
+    log_message("WARN", "분석할 데이터가 없습니다.")
+    return(list(alpha = NA, interpretation = "데이터 부족"))
+  }
+  
+  cat(sprintf("🔄 Krippendorff's Alpha 계산 중... (%d개 항목, %d명 코더)\n", 
+              nrow(data_matrix), ncol(data_matrix)))
+  
+  tryCatch({
+    # 계산 시작 시간 기록
+    start_time <- Sys.time()
+    
+    # 데이터 전치 (irr 패키지 요구사항)
+    cat("  📊 데이터 전치 중...\n")
+    transposed_data <- t(data_matrix)
+    
+    # irr 패키지의 kripp.alpha 함수 사용
+    cat("  🧮 Alpha 값 계산 중...\n")
+    result <- suppressWarnings(kripp.alpha(transposed_data, method = level))
+    alpha_value <- result$value
+    
+    # 계산 완료 시간
+    elapsed_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    cat(sprintf("  ✅ 계산 완료 (%.2f초 소요)\n", elapsed_time))
+    
+    # 해석 추가
+    cat("  📋 결과 해석 중...\n")
+    interpretation <- case_when(
+      alpha_value >= 0.8 ~ "매우 높은 신뢰도 (Excellent)",
+      alpha_value >= 0.67 ~ "높은 신뢰도 (Good)", 
+      alpha_value >= 0.5 ~ "중간 신뢰도 (Moderate)",
+      alpha_value >= 0.3 ~ "낮은 신뢰도 (Low)",
+      TRUE ~ "매우 낮은 신뢰도 (Poor)"
+    )
+    
+    cat(sprintf("  🎯 Alpha = %.3f (%s)\n", alpha_value, interpretation))
+    
+    return(list(
+      alpha = alpha_value,
+      interpretation = interpretation,
+      n_items = nrow(data_matrix),
+      n_raters = ncol(data_matrix),
+      calculation_time = elapsed_time
+    ))
+    
+  }, error = function(e) {
+    cat("  ❌ 계산 실패\n")
+    log_message("ERROR", sprintf("Alpha 계산 실패: %s", e$message))
+    return(list(alpha = NA, interpretation = "계산 실패", error = e$message))
+  })
+}
