@@ -106,7 +106,7 @@ cat(paste0("  ", single_sample_df$content), "\n\n")
 cat("▶️ 분석 결과:\n")
 if (!is.na(final_single_df$error_message)) {
   # 에러 발생 시
-  cat("  - 에러 발생:", final_single_df$dominant_emotion, "\n")
+  cat("  - 에러 발생:", final_single_df$combinated_emotion, "\n")
   cat("  - 에러 내용:", final_single_df$error_message, "\n")
 } else {
   # 분석 성공 시
@@ -128,25 +128,13 @@ if (!is.na(final_single_df$error_message)) {
   pad_scores <- final_single_df %>% select(P, A, D)
   print_scores(pad_scores, "PAD 모델 점수")
   
-  cat("  - 지배 감정:", final_single_df$dominant_emotion, "\n")
+  cat("  - 조합 감정:", final_single_df$combinated_emotion, "\n")
   cat("  - 복합 감정:", final_single_df$complex_emotion, "\n\n")
   
-  # 분석 근거 출력 (구조화된 근거)
-  cat("  - 감정 점수 근거:\n")
-  if (!is.na(final_single_df$emotion_scores_rationale)) {
-    cat(paste0("    ", strwrap(final_single_df$emotion_scores_rationale, width = 75)), sep = "\n")
-  }
-  cat("\n")
-  
-  cat("  - PAD 분석 근거:\n")
-  if (!is.na(final_single_df$PAD_analysis)) {
-    cat(paste0("    ", strwrap(final_single_df$PAD_analysis, width = 75)), sep = "\n")
-  }
-  cat("\n")
-  
-  cat("  - 복합 감정 추론:\n")
-  if (!is.na(final_single_df$complex_emotion_reasoning)) {
-    cat(paste0("    ", strwrap(final_single_df$complex_emotion_reasoning, width = 75)), sep = "\n")
+  # 분석 근거 출력 (통합된 근거)
+  cat("  - 분석 근거:\n")
+  if (!is.na(final_single_df$rationale)) {
+    cat(paste0("    ", strwrap(final_single_df$rationale, width = 75)), sep = "\n")
   }
   cat("\n")
 }

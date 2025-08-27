@@ -273,27 +273,42 @@ BatchMonitor <- R6Class("BatchMonitor",
       for (i in seq_along(results)) {
         result_item <- results[[i]]
         
-        # 요청 키로 원본 데이터 매칭 (배치 응답 구조에 맞게 수정)
+        # 메타데이터 기반 매칭을 위한 key 파싱
         request_key <- result_item$key %||% result_item$metadata$key %||% paste0("request-", i)
-        row_index <- as.numeric(gsub("request-", "", request_key))
+        
+        # key에서 메타데이터 추출
+        if (startsWith(request_key, "doc_")) {
+          # doc_id 기반 매칭
+          doc_id <- gsub("^doc_", "", request_key)
+          match_info <- list(type = "doc_id", value = doc_id)
+        } else if (grepl("^post_\\d+_comment_\\d+$", request_key)) {
+          # post_id, comment_id 기반 매칭
+          parts <- strsplit(request_key, "_")[[1]]
+          post_id <- as.numeric(parts[2])
+          comment_id <- as.numeric(parts[4])
+          match_info <- list(type = "post_comment", post_id = post_id, comment_id = comment_id)
+        } else {
+          # 순서 기반 폴백
+          row_index <- as.numeric(gsub("request-", "", request_key))
+          match_info <- list(type = "row_index", value = row_index)
+        }
         
         # 배치 응답 구조 확인: result_item$response가 실제 API 응답
         if (is.null(result_item$response) || is.null(result_item$response$candidates)) {
           # 오류 케이스
           error_msg <- result_item$error$message %||% result_item$response$error$message %||% "알 수 없는 오류"
-          parsed_results[[i]] <- list(
-            row_index = row_index,
-            dominant_emotion = "API 오류",
+          # 오류 결과에 매칭 정보 포함
+          error_result <- list(
+            match_info = match_info,
+            combinated_emotion = "API 오류",
             rationale = error_msg,
             기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
             슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
             P = NA, A = NA, D = NA,
             complex_emotion = NA,
-            emotion_scores_rationale = NA,
-            PAD_analysis = NA,
-            complex_emotion_reasoning = NA,
             error_message = error_msg
           )
+          parsed_results[[i]] <- error_result
         } else {
           # 성공 케이스 - JSON 응답 파싱
           # 배치 응답 구조: result_item$response$candidates[[1]]$content$parts[[1]]$text
@@ -305,7 +320,7 @@ BatchMonitor <- R6Class("BatchMonitor",
                 response_text <- parts[[1]]$text
                 
                 emotion_result <- self$parse_emotion_json(response_text)
-                emotion_result$row_index <- row_index
+                emotion_result$match_info <- match_info
                 parsed_results[[i]] <- emotion_result
               } else {
                 stop("응답에서 텍스트를 찾을 수 없습니다")
@@ -314,118 +329,76 @@ BatchMonitor <- R6Class("BatchMonitor",
               stop("응답에서 candidates를 찾을 수 없습니다")
             }
           }, error = function(e) {
-            parsed_results[[i]] <- list(
-              row_index = row_index,
-              dominant_emotion = "파싱 오류",
+            # 파싱 오류 결과에 매칭 정보 포함
+            parsing_error_result <- list(
+              match_info = match_info,
+              combinated_emotion = "파싱 오류",
               rationale = sprintf("JSON 파싱 실패: %s", e$message),
               기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
               슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
               P = NA, A = NA, D = NA,
               complex_emotion = NA,
-              emotion_scores_rationale = NA,
-              PAD_analysis = NA,
-              complex_emotion_reasoning = NA,
               error_message = sprintf("파싱 오류: %s", e$message)
             )
+            parsed_results[[i]] <- parsing_error_result
           })
         }
       }
       
-      # 데이터프레임으로 변환
-      results_df <- do.call(rbind, lapply(parsed_results, function(x) {
-        if (is.null(x$row_index)) x$row_index <- NA
-        # dominant_emotion이 없는 경우 기본값 설정
-        if (is.null(x$dominant_emotion)) x$dominant_emotion <- "파싱 오류"
-        data.frame(x, stringsAsFactors = FALSE)
-      }))
+      # 메타데이터 기반 매칭을 위한 데이터 준비
+      final_df <- original_data
       
-      # 원본 데이터와 병합
-      final_df <- original_data %>%
-        mutate(row_index = row_number()) %>%
-        left_join(results_df, by = "row_index") %>%
-        select(-row_index) %>%
-        # dominant_emotion이 여전히 NA인 경우 기본값 설정
-        mutate(dominant_emotion = ifelse(is.na(dominant_emotion), "처리 안됨", dominant_emotion))
+      # 각 결과를 메타데이터 기반으로 매칭하여 원본 데이터에 결합
+      for (i in seq_along(parsed_results)) {
+        result <- parsed_results[[i]]
+        match_info <- result$match_info
+        
+        # match_info에서 매칭 정보 제거 (결과에는 포함하지 않음)
+        result$match_info <- NULL
+        
+        # 매칭 대상 행 찾기
+        if (match_info$type == "doc_id" && "doc_id" %in% names(final_df)) {
+          target_rows <- which(final_df$doc_id == match_info$value)
+        } else if (match_info$type == "post_comment" && all(c("post_id", "comment_id") %in% names(final_df))) {
+          target_rows <- which(final_df$post_id == match_info$post_id & final_df$comment_id == match_info$comment_id)
+        } else if (match_info$type == "row_index") {
+          target_rows <- match_info$value
+          if (target_rows > nrow(final_df)) target_rows <- integer(0)
+        } else {
+          # 매칭 실패 시 건너뛰기
+          log_message("WARN", sprintf("매칭 실패: %s", jsonlite::toJSON(match_info)))
+          next
+        }
+        
+        # 매칭된 행에 결과 추가
+        if (length(target_rows) > 0) {
+          for (col_name in names(result)) {
+            if (col_name %in% names(final_df)) {
+              final_df[target_rows, col_name] <- result[[col_name]]
+            } else {
+              # 새 컬럼 추가
+              final_df[[col_name]] <- NA
+              final_df[target_rows, col_name] <- result[[col_name]]
+            }
+          }
+        }
+      }
+      
+      # 분석되지 않은 행에 기본값 설정
+      if (!"combinated_emotion" %in% names(final_df)) {
+        final_df$combinated_emotion <- "처리 안됨"
+      } else {
+        final_df$combinated_emotion[is.na(final_df$combinated_emotion)] <- "처리 안됨"
+      }
       
       log_message("INFO", sprintf("결과 파싱 완료: %d행", nrow(final_df)))
       return(final_df)
     },
     
-    # 5. JSON 파싱 함수 (배치 전용 최적화)
+    # 5. JSON 파싱 함수 (일반 분석과 동일한 결과 구조 생성)
     parse_emotion_json = function(json_text) {
-      tryCatch({
-        # JSON 정리 (마크다운 코드 블록 제거)
-        response_clean <- gsub("```json\\s*|\\s*```", "", json_text, perl = TRUE)
-        response_clean <- gsub("^\\s+|\\s+$", "", response_clean)
-        
-        parsed_data <- jsonlite::fromJSON(response_clean, flatten = TRUE)
-        
-        # 데이터 추출 및 검증 (통일된 구조)
-        if (all(c("plutchik_emotions", "PAD", "dominant_emotion", "complex_emotion", "rationale") %in% names(parsed_data))) {
-          
-          plutchik_emotions <- parsed_data$plutchik_emotions
-          pad_scores <- parsed_data$PAD
-          rationale <- parsed_data$rationale
-          
-          # 결과 구조 생성
-          result <- list(
-            # 플루치크 8대 기본감정 추출
-            기쁨 = as.numeric(plutchik_emotions[["기쁨"]] %||% NA_real_),
-            신뢰 = as.numeric(plutchik_emotions[["신뢰"]] %||% NA_real_),
-            공포 = as.numeric(plutchik_emotions[["공포"]] %||% NA_real_),
-            놀람 = as.numeric(plutchik_emotions[["놀람"]] %||% NA_real_),
-            슬픔 = as.numeric(plutchik_emotions[["슬픔"]] %||% NA_real_),
-            혐오 = as.numeric(plutchik_emotions[["혐오"]] %||% NA_real_),
-            분노 = as.numeric(plutchik_emotions[["분노"]] %||% NA_real_),
-            기대 = as.numeric(plutchik_emotions[["기대"]] %||% NA_real_),
-            
-            # PAD 점수 추출
-            P = as.numeric(pad_scores[["P"]] %||% NA_real_),
-            A = as.numeric(pad_scores[["A"]] %||% NA_real_),
-            D = as.numeric(pad_scores[["D"]] %||% NA_real_),
-            
-            # 결과 및 근거 추출
-            dominant_emotion = as.character(parsed_data$dominant_emotion %||% NA_character_),
-            complex_emotion = as.character(parsed_data$complex_emotion %||% NA_character_),
-            emotion_scores_rationale = as.character(rationale[["emotion_scores"]] %||% NA_character_),
-            PAD_analysis = as.character(rationale[["PAD_analysis"]] %||% NA_character_),
-            complex_emotion_reasoning = as.character(rationale[["complex_emotion_reasoning"]] %||% NA_character_),
-            error_message = NA_character_
-          )
-          
-          return(result)
-        } else {
-          # 필수 필드 누락
-          return(list(
-            dominant_emotion = "구조 오류",
-            rationale = "응답에 필수 필드가 없습니다",
-            기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
-            슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
-            P = NA, A = NA, D = NA,
-            complex_emotion = NA,
-            emotion_scores_rationale = NA,
-            PAD_analysis = NA,
-            complex_emotion_reasoning = NA,
-            error_message = "응답에 필수 필드가 없습니다"
-          ))
-        }
-        
-      }, error = function(e) {
-        # 파싱 실패 시 기본 구조 반환
-        log_message("ERROR", sprintf("JSON 파싱 실패: %s", e$message))
-        return(list(
-          dominant_emotion = "파싱 오류",
-          rationale = sprintf("파싱 실패: %s", e$message),
-          기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
-          슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
-          P = NA, A = NA, D = NA,
-          complex_emotion = NA,
-          emotion_scores_rationale = NA,
-          PAD_analysis = NA,
-          complex_emotion_reasoning = NA,
-          error_message = sprintf("파싱 오류: %s", e$message)
-        ))
-      })
+      # libs/functions.R의 parse_emotion_json_internal과 동일한 로직 사용
+      return(parse_emotion_json_internal(json_text))
     },
     
     # 6. 완전한 배치 처리 (다운로드 + 파싱 + 저장)
@@ -588,9 +561,9 @@ BatchMonitor <- R6Class("BatchMonitor",
       # 분석 이력 등록 (유효한 결과만)
       valid_results <- final_df %>% 
         filter(
-          !is.na(dominant_emotion) & 
-          dominant_emotion != "API 오류" & 
-          dominant_emotion != "파싱 오류"
+          !is.na(combinated_emotion) & 
+          combinated_emotion != "API 오류" & 
+          combinated_emotion != "파싱 오류"
         )
       
       if (nrow(valid_results) > 0) {

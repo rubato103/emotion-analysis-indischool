@@ -5,6 +5,7 @@
 source("libs/config.R")
 source("libs/utils.R")
 source("modules/human_coding.R")
+source("additional_reliability_functions.R")
 
 required_packages <- c("dplyr", "googlesheets4", "readr", "irr")
 new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
@@ -662,6 +663,112 @@ if (!is.na(alpha_val) && is.numeric(alpha_val)) {
     cat("  - 현재 평가 기준과 프롬프트를 유지하세요.\n")
   }
 }
+
+# =============================================================================
+# 추가 신뢰도 분석 (가중 합의 지수, 단순 일치율, 순서형 Alpha)
+# =============================================================================
+
+cat("\n")
+cat(paste(rep("=", 65), collapse = ""), "\n")
+cat("             추가 신뢰도 측정 분석\n")
+cat(paste(rep("=", 65), collapse = ""), "\n")
+
+# 가중 합의 지수 계산
+cat("\n🔬 가중 합의 지수 분석 중...\n")
+if (exists("merged_data") && nrow(merged_data) > 0) {
+  weighted_result <- calculate_weighted_agreement_index(merged_data)
+  
+  if (!is.null(weighted_result$weighted_index) && !is.na(weighted_result$weighted_index)) {
+    cat(sprintf("📊 가중 합의 지수: %.3f (%.1f%%)\n", 
+                weighted_result$weighted_index, 
+                weighted_result$weighted_index * 100))
+    
+    # 패턴 분석 결과 출력
+    if (!is.null(weighted_result$pattern_summary)) {
+      cat("📋 일치 패턴 분포:\n")
+      for (pattern in names(weighted_result$pattern_summary)) {
+        count <- weighted_result$pattern_summary[pattern]
+        percentage <- round(count / weighted_result$n_items * 100, 1)
+        cat(sprintf("  • %s: %d개 (%.1f%%)\n", pattern, count, percentage))
+      }
+    }
+    
+    # 신뢰도 결과에 추가
+    reliability_results$weighted_agreement <- weighted_result
+  } else {
+    cat("❌ 가중 합의 지수 계산 실패\n")
+  }
+}
+
+# 단순 일치율 계산
+cat("\n🔬 단순 일치율 분석 중...\n")
+if (exists("merged_data") && nrow(merged_data) > 0) {
+  simple_result <- calculate_simple_agreement(merged_data)
+  
+  if (!is.null(simple_result$agreement_rate) && !is.na(simple_result$agreement_rate)) {
+    cat(sprintf("📊 단순 일치율: %.3f (%.1f%%)\n", 
+                simple_result$agreement_rate, 
+                simple_result$agreement_rate * 100))
+    
+    # 코더별 TRUE 비율 출력
+    if (!is.null(simple_result$coder_true_rates)) {
+      cat("👥 코더별 TRUE 응답 비율:\n")
+      for (coder_name in names(simple_result$coder_true_rates)) {
+        rate <- simple_result$coder_true_rates[coder_name]
+        cat(sprintf("  • %s: %.1f%%\n", 
+                    gsub("_human_agree_value", "", coder_name), 
+                    rate * 100))
+      }
+    }
+    
+    # 신뢰도 결과에 추가
+    reliability_results$simple_agreement <- simple_result
+  } else {
+    cat("❌ 단순 일치율 계산 실패\n")
+  }
+}
+
+# 순서형 Krippendorff's Alpha 계산
+cat("\n🔬 순서형 Krippendorff's Alpha 분석 중...\n")
+if (exists("merged_data") && nrow(merged_data) > 0) {
+  ordinal_result <- calculate_ordinal_krippendorff_alpha(merged_data)
+  
+  if (!is.null(ordinal_result$alpha) && !is.na(ordinal_result$alpha)) {
+    cat(sprintf("📊 순서형 Alpha: %.3f (%s)\n", 
+                ordinal_result$alpha, 
+                ordinal_result$interpretation))
+    cat(sprintf("🔄 변환 방법: %s\n", ordinal_result$transformation))
+    
+    # 신뢰도 결과에 추가
+    reliability_results$ordinal_alpha <- ordinal_result
+  } else {
+    cat("❌ 순서형 Alpha 계산 실패\n")
+  }
+}
+
+# 종합 신뢰도 요약
+cat("\n")
+cat(paste(rep("=", 65), collapse = ""), "\n")
+cat("               종합 신뢰도 분석 요약\n")
+cat(paste(rep("=", 65), collapse = ""), "\n")
+
+nominal_alpha <- reliability_results$agreement$alpha %||% NA
+weighted_index <- reliability_results$weighted_agreement$weighted_index %||% NA
+simple_rate <- reliability_results$simple_agreement$agreement_rate %||% NA
+ordinal_alpha <- reliability_results$ordinal_alpha$alpha %||% NA
+
+cat("📊 모든 신뢰도 측정값 요약:\n")
+cat(sprintf("  • 명목형 Krippendorff's Alpha: %.3f\n", nominal_alpha %||% -999))
+cat(sprintf("  • 순서형 Krippendorff's Alpha: %.3f\n", ordinal_alpha %||% -999))
+cat(sprintf("  • 가중 합의 지수: %.3f (%.1f%%)\n", weighted_index %||% -999, (weighted_index %||% 0) * 100))
+cat(sprintf("  • 단순 일치율: %.3f (%.1f%%)\n", simple_rate %||% -999, (simple_rate %||% 0) * 100))
+
+# 권장사항
+cat("\n💡 신뢰도 측정값 해석 가이드:\n")
+cat("  • Krippendorff's Alpha: 우연 보정된 신뢰도 (전통적 지표)\n")
+cat("  • 가중 합의 지수: 부분 일치 인정한 실용적 지표\n")
+cat("  • 단순 일치율: 가장 직관적이고 이해하기 쉬운 지표\n")
+cat("  • 순서형 Alpha: FALSE < TRUE 순서 관계를 고려한 지표\n")
 
 cat(paste(rep("=", 65), collapse = ""), "\n")
 cat("📁 파일 저장 및 완료 안내\n")

@@ -100,6 +100,7 @@ BatchRequestor <- R6Class("BatchRequestor",
       log_message("INFO", "배치 요청기 초기화 완료")
     },
     
+    
     # 1. 배치 요청 파일 생성 (JSONL 형식)
     create_batch_file = function(data, file_path) {
       if (BATCH_CONFIG$detailed_logging) {
@@ -130,10 +131,21 @@ BatchRequestor <- R6Class("BatchRequestor",
           )
         }
         
+        # 메타데이터를 포함한 고유 key 생성 (원본 데이터 매칭용)
+        unique_key <- if ("doc_id" %in% names(data) && !is.na(data$doc_id[i])) {
+          # doc_id가 있으면 사용
+          paste0("doc_", data$doc_id[i])
+        } else if (all(c("post_id", "comment_id") %in% names(data))) {
+          # post_id, comment_id 조합 사용
+          paste0("post_", data$post_id[i], "_comment_", data$comment_id[i])
+        } else {
+          # 폴백: 순서 기반
+          sprintf("request-%d", i)
+        }
+        
         # Google 공식 JSONL 형식: key + request 구조
-        # {"key": "request-1", "request": {...}}
         jsonl_obj <- list(
-          key = sprintf("request-%d", i),
+          key = unique_key,
           request = list(
             contents = list(
               list(
@@ -172,8 +184,8 @@ BatchRequestor <- R6Class("BatchRequestor",
       return(file_path)
     },
     
-    # 2. 파일 업로드 (Resumable Upload)
-    upload_file = function(file_path) {
+    # 2. 파일 업로드 (재시도 메커니즘 포함)
+    upload_file = function(file_path, max_retries = 3) {
       log_message("INFO", "파일 업로드 시작...")
       
       # 파일 정보
@@ -181,53 +193,78 @@ BatchRequestor <- R6Class("BatchRequestor",
       mime_type <- "application/jsonl"
       display_name <- sprintf("batch_input_%s", format(Sys.time(), "%Y%m%d_%H%M%S"))
       
-      # 1단계: Resumable upload 시작
-      upload_base_url <- "https://generativelanguage.googleapis.com"
-      start_response <- httr2::request(sprintf("%s/upload/v1beta/files", upload_base_url)) %>%
-        httr2::req_headers(
-          `x-goog-api-key` = self$api_key,
-          `X-Goog-Upload-Protocol` = "resumable",
-          `X-Goog-Upload-Command` = "start",
-          `X-Goog-Upload-Header-Content-Length` = as.character(file_size),
-          `X-Goog-Upload-Header-Content-Type` = mime_type,
-          `Content-Type` = "application/json"
-        ) %>%
-        httr2::req_body_json(list(
-          file = list(display_name = display_name)
-        )) %>%
-        httr2::req_perform()
+      # 재시도 로직 (업로드 단계에서만)
+      retry_count <- 0
+      base_delay <- 2
       
-      # Upload URL 추출
-      upload_url <- httr2::resp_headers(start_response)[["x-goog-upload-url"]]
-      if (is.null(upload_url)) {
-        stop("업로드 URL을 가져올 수 없습니다.")
+      while (retry_count <= max_retries) {
+        tryCatch({
+          # 1단계: Resumable upload 시작
+          upload_base_url <- "https://generativelanguage.googleapis.com"
+          start_response <- httr2::request(sprintf("%s/upload/v1beta/files", upload_base_url)) %>%
+            httr2::req_headers(
+              `x-goog-api-key` = self$api_key,
+              `X-Goog-Upload-Protocol` = "resumable",
+              `X-Goog-Upload-Command` = "start",
+              `X-Goog-Upload-Header-Content-Length` = as.character(file_size),
+              `X-Goog-Upload-Header-Content-Type` = mime_type,
+              `Content-Type` = "application/json"
+            ) %>%
+            httr2::req_body_json(list(
+              file = list(display_name = display_name)
+            )) %>%
+            httr2::req_perform()
+          
+          # Upload URL 추출
+          upload_url <- httr2::resp_headers(start_response)[["x-goog-upload-url"]]
+          if (is.null(upload_url)) {
+            stop("업로드 URL을 가져올 수 없습니다.")
+          }
+          
+          # 2단계: 실제 파일 업로드
+          file_content <- readBin(file_path, "raw", file_size)
+          
+          upload_response <- httr2::request(upload_url) %>%
+            httr2::req_headers(
+              `Content-Length` = as.character(file_size),
+              `X-Goog-Upload-Offset` = "0",
+              `X-Goog-Upload-Command` = "upload, finalize"
+            ) %>%
+            httr2::req_body_raw(file_content) %>%
+            httr2::req_perform()
+          
+          upload_result <- httr2::resp_body_json(upload_response)
+          full_uri <- upload_result$file$uri
+          
+          # 파일 ID만 추출 (files/xxxxx 형식)
+          file_id <- sub(".*/(files/[^/]+).*", "\\1", full_uri)
+          if (!grepl("^files/", file_id)) {
+            # 경로에서 files/ 부분이 없으면 파일명만 추출하여 추가
+            file_name <- basename(full_uri)
+            file_id <- paste0("files/", file_name)
+          }
+          
+          log_message("INFO", sprintf("파일 업로드 완료: %s (ID: %s)", full_uri, file_id))
+          return(file_id)
+          
+        }, error = function(e) {
+          retry_count <<- retry_count + 1
+          
+          # 네트워크 오류나 일시적 오류만 재시도
+          is_retryable <- grepl("timeout|connection|network|server error|5[0-9][0-9]", e$message, ignore.case = TRUE)
+          
+          if (!is_retryable || retry_count > max_retries) {
+            log_message("ERROR", sprintf("파일 업로드 실패 (재시도 %d/%d): %s", retry_count - 1, max_retries, e$message))
+            stop(sprintf("파일 업로드에 실패했습니다: %s", e$message))
+          }
+          
+          # 지수 백오프로 대기
+          delay_seconds <- base_delay * (2 ^ (retry_count - 1)) + runif(1, 0, 1)
+          log_message("INFO", sprintf("파일 업로드 재시도 대기 중... %.1f초 후 재시도 (%d/%d)", 
+                                     delay_seconds, retry_count, max_retries))
+          Sys.sleep(delay_seconds)
+        })
       }
-      
-      # 2단계: 실제 파일 업로드
-      file_content <- readBin(file_path, "raw", file_size)
-      
-      upload_response <- httr2::request(upload_url) %>%
-        httr2::req_headers(
-          `Content-Length` = as.character(file_size),
-          `X-Goog-Upload-Offset` = "0",
-          `X-Goog-Upload-Command` = "upload, finalize"
-        ) %>%
-        httr2::req_body_raw(file_content) %>%
-        httr2::req_perform()
-      
-      upload_result <- httr2::resp_body_json(upload_response)
-      full_uri <- upload_result$file$uri
-      
-      # 파일 ID만 추출 (files/xxxxx 형식)
-      file_id <- sub(".*/(files/[^/]+).*", "\\1", full_uri)
-      if (!grepl("^files/", file_id)) {
-        # 경로에서 files/ 부분이 없으면 파일명만 추출하여 추가
-        file_name <- basename(full_uri)
-        file_id <- paste0("files/", file_name)
-      }
-      
-      log_message("INFO", sprintf("파일 업로드 완료: %s (ID: %s)", full_uri, file_id))
-      return(file_id)
     },
     
     # 3. 배치 작업 생성 및 제출
@@ -382,7 +419,7 @@ run_batch_request <- function(sample_mode = "ask") {
     return(NULL)
   }
   
-  # 5. 배치 요청 실행
+  # 5. 단일 배치 요청 실행 (파일 API 방식)
   requestor <- BatchRequestor$new()
   
   # 임시 파일 경로
@@ -393,10 +430,10 @@ run_batch_request <- function(sample_mode = "ask") {
     # 배치 파일 생성
     requestor$create_batch_file(data_for_batch, batch_file)
     
-    # 파일 업로드
+    # 파일 업로드 (재시도 메커니즘 포함)
     file_id <- requestor$upload_file(batch_file)
     
-    # 배치 작업 생성 및 제출
+    # 배치 작업 생성 및 제출 (비동기 처리)
     batch_name <- requestor$submit_batch_job(file_id, batch_file, selected_mode, nrow(data_for_batch))
     
     return(list(

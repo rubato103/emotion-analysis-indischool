@@ -21,7 +21,7 @@ AnalysisTracker <- R6::R6Class("AnalysisTracker",
           analysis_date = as.POSIXct(character()),
           analysis_type = character(),  # "sample", "full", "test"
           model_used = character(),
-          dominant_emotion = character(),
+          combinated_emotion = character(),
           analysis_file = character(),
           stringsAsFactors = FALSE
         )
@@ -44,7 +44,7 @@ AnalysisTracker <- R6::R6Class("AnalysisTracker",
       
       # 새로운 분석 결과 준비
       new_entries <- analysis_results %>%
-        select(any_of(c("post_id", "comment_id", "dominant_emotion"))) %>%
+        select(any_of(c("post_id", "comment_id", "combinated_emotion"))) %>%
         mutate(
           id = paste0(post_id, "_", ifelse(is.na(comment_id), 0, comment_id)),
           analysis_date = Sys.time(),
@@ -52,7 +52,7 @@ AnalysisTracker <- R6::R6Class("AnalysisTracker",
           model_used = model_used %||% "unknown",
           analysis_file = analysis_file %||% "unknown"
         ) %>%
-        select(id, post_id, comment_id, analysis_date, analysis_type, model_used, dominant_emotion, analysis_file)
+        select(id, post_id, comment_id, analysis_date, analysis_type, model_used, combinated_emotion, analysis_file)
       
       # 기존 이력과 병합 (중복 제거)
       updated_history <- bind_rows(history, new_entries) %>%

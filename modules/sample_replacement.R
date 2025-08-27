@@ -96,9 +96,9 @@ quality_replacement <- function(data, max_size) {
     mutate(
       # 신뢰도 점수 계산 (여러 기준 종합)
       confidence_score = case_when(
-        dominant_emotion == "API 오류" ~ 0,
-        is.na(dominant_emotion) ~ 0,
-        dominant_emotion == "중립" ~ 0.7,  # 중립은 상대적으로 낮은 신뢰도
+        combinated_emotion == "API 오류" ~ 0,
+        is.na(combinated_emotion) ~ 0,
+        combinated_emotion == "중립" ~ 0.7,  # 중립은 상대적으로 낮은 신뢰도
         TRUE ~ 1.0
       ),
       # 텍스트 길이 점수 (너무 짧거나 긴 것 제외)
@@ -124,7 +124,7 @@ quality_replacement <- function(data, max_size) {
     summarise(
       avg_confidence = mean(confidence_score, na.rm = TRUE),
       avg_text_length = mean(text_length, na.rm = TRUE),
-      api_error_count = sum(dominant_emotion == "API 오류", na.rm = TRUE)
+      api_error_count = sum(combinated_emotion == "API 오류", na.rm = TRUE)
     )
   
   log_message("INFO", sprintf("선택된 샘플 품질: 평균 신뢰도 %.2f, 평균 길이 %.0f자, API 오류 %d건",

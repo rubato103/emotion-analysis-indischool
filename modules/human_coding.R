@@ -147,7 +147,7 @@ prepare_coding_data <- function(analysis_results) {
       post_id,                         # 아이디
       content,                         # 콘텐츠
       any_of(c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대")), # 플루치크 8대 기본감정
-      dominant_emotion,                # 지배감정
+      combinated_emotion,                # 지배감정
       P, A, D,                        # PAD 점수
       complex_emotion,                # 복합감정
       emotion_scores_rationale,        # 감정 점수 근거
@@ -163,7 +163,7 @@ prepare_coding_data <- function(analysis_results) {
       post_id,                        # 아이디
       content,                        # 콘텐츠  
       기쁨, 신뢰, 공포, 놀람, 슬픔, 혐오, 분노, 기대, # 플루치크 8대 기본감정
-      dominant_emotion,               # 지배감정
+      combinated_emotion,               # 지배감정
       P, A, D,                       # PAD 점수
       complex_emotion,               # 복합감정
       emotion_scores_rationale,      # 감정 점수 근거
@@ -206,34 +206,29 @@ prepare_coding_data_with_checkbox <- function(analysis_results) {
   coding_data <- analysis_results %>%
     # 존재하는 컬럼만 선택 (post_id와 comment_id 모두 포함)
     select(
-      any_of(c("post_id")),                    # post_id (필수)
-      any_of(c("comment_id")),                 # comment_id (있으면 포함)
-      all_of(content_cols[1]),                 # 첫 번째 콘텐츠 컬럼
-      any_of(c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대")), # 플루치크 8대 기본감정
-      any_of(c("dominant_emotion", "지배감정")), # 지배감정
-      any_of(c("P", "A", "D")),                # PAD 점수
-      any_of(c("complex_emotion", "복합감정")), # 복합감정
-      any_of(c("emotion_scores_rationale", "감정점수근거")), # 감정 점수 근거
-      any_of(c("PAD_analysis", "PAD분석근거")), # PAD 분석 근거
-      any_of(c("complex_emotion_reasoning", "복합감정추론")), # 복합감정 추론
-      any_of(c("rationale", "근거", "분석근거"))    # 근거
+      any_of(c("post_id")),
+      any_of(c("comment_id")),
+      all_of(content_cols[1]),
+      any_of(c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대")),
+      any_of(c("combinated_emotion")),
+      any_of(c("P", "A", "D")),
+      any_of(c("complex_emotion")),
+      any_of(c("rationale"))
     ) %>%
     # 체크박스용 컬럼 추가 (논리값으로 초기화)
     mutate(
-      human_agree = as.logical(FALSE)  # 명시적으로 논리값 설정
+      human_agree = as.logical(FALSE)
     ) %>%
     # 실제로 존재하는 컬럼들을 우선순위에 따라 재정렬
     select(
-      any_of(c("post_id")),                    # post_id
-      any_of(c("comment_id")),                 # comment_id (있으면)
-      all_of(content_cols[1]),                 # 확인된 콘텐츠 컬럼
-      any_of(c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대")), # 플루치크 8대 기본감정
-      any_of(c("dominant_emotion", "지배감정")),
+      any_of(c("post_id")),
+      any_of(c("comment_id")),
+      all_of(content_cols[1]),
+      any_of(c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대")),
+      any_of(c("combinated_emotion")),
       any_of(c("P", "A", "D")),
-      any_of(c("complex_emotion", "복합감정")),
-      any_of(c("emotion_scores_rationale", "감정점수근거")), # 감정 점수 근거
-      any_of(c("PAD_analysis", "PAD분석근거")), # PAD 분석 근거
-      any_of(c("complex_emotion_reasoning", "복합감정추론")), # 복합감정 추론
+      any_of(c("complex_emotion")),
+      any_of(c("rationale")),
       human_agree
     )
   

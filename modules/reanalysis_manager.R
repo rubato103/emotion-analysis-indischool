@@ -86,14 +86,14 @@ ReanalysisManager <- R6::R6Class("ReanalysisManager",
       # 품질 지표 계산
       metrics <- list(
         total_count = nrow(analysis_results),
-        error_count = sum(analysis_results$dominant_emotion %in% c("API 오류", "파싱 오류", "분석 오류"), na.rm = TRUE),
-        na_count = sum(is.na(analysis_results$dominant_emotion)),
-        valid_count = sum(!is.na(analysis_results$dominant_emotion) & 
-                         !analysis_results$dominant_emotion %in% c("API 오류", "파싱 오류", "분석 오류")),
+        error_count = sum(analysis_results$combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류"), na.rm = TRUE),
+        na_count = sum(is.na(analysis_results$combinated_emotion)),
+        valid_count = sum(!is.na(analysis_results$combinated_emotion) & 
+                         !analysis_results$combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류")),
         
         # 감정 분포 분석
-        neutral_heavy = sum(analysis_results$dominant_emotion == "중립", na.rm = TRUE),
-        emotion_diversity = length(unique(analysis_results$dominant_emotion[!is.na(analysis_results$dominant_emotion)])),
+        neutral_heavy = sum(analysis_results$combinated_emotion == "중립", na.rm = TRUE),
+        emotion_diversity = length(unique(analysis_results$combinated_emotion[!is.na(analysis_results$combinated_emotion)])),
         
         # 신뢰도 관련 (rationale 길이로 추정)
         avg_rationale_length = mean(nchar(analysis_results$rationale), na.rm = TRUE),
@@ -193,7 +193,7 @@ ReanalysisManager <- R6::R6Class("ReanalysisManager",
       # 오류 유형 기준
       if (length(criteria$error_types) > 0) {
         candidates <- candidates %>% 
-          filter(dominant_emotion %in% criteria$error_types)
+          filter(combinated_emotion %in% criteria$error_types)
       }
       
       # 특정 프롬프트 버전
@@ -349,10 +349,10 @@ ReanalysisManager <- R6::R6Class("ReanalysisManager",
         target_data <- target_data %>%
           mutate(
             priority_score = case_when(
-              dominant_emotion %in% c("API 오류", "파싱 오류") ~ 10,  # 오류 최우선
-              dominant_emotion == "분석 오류" ~ 8,
-              dominant_emotion == "중립" ~ 6,                         # 중립 재검토
-              is.na(dominant_emotion) ~ 9,                           # NA 결과 우선
+              combinated_emotion %in% c("API 오류", "파싱 오류") ~ 10,  # 오류 최우선
+              combinated_emotion == "분석 오류" ~ 8,
+              combinated_emotion == "중립" ~ 6,                         # 중립 재검토
+              is.na(combinated_emotion) ~ 9,                           # NA 결과 우선
               TRUE ~ 5
             )
           ) %>%

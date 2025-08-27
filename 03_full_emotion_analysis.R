@@ -245,8 +245,8 @@ if (api_call_count == 0) {
   
   # 5. 실패 항목 재분석 (기존 로직과 동일)
   rerun_final_df <- NULL
-  successful_df <- initial_api_results_df %>% filter(!(dominant_emotion %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(dominant_emotion)))
-  failed_df <- initial_api_results_df %>% filter(dominant_emotion %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(dominant_emotion))
+  successful_df <- initial_api_results_df %>% filter(!(combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(combinated_emotion)))
+  failed_df <- initial_api_results_df %>% filter(combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(combinated_emotion))
   
   if (nrow(failed_df) > 0) {
     log_message("WARN", sprintf("%d개 항목이 실패하여 재분석을 진행합니다...", nrow(failed_df)))
@@ -289,11 +289,9 @@ if (nrow(data_skipped) > 0) {
       기쁨 = NA_real_, 신뢰 = NA_real_, 공포 = NA_real_, 놀람 = NA_real_,
       슬픔 = NA_real_, 혐오 = NA_real_, 분노 = NA_real_, 기대 = NA_real_,
       P = NA_real_, A = NA_real_, D = NA_real_,
-      dominant_emotion = "분석 제외",
+      combinated_emotion = "분석 제외",
       complex_emotion = NA_character_,
-      emotion_scores_rationale = "필터링된 내용 (삭제, 단문 등)",
-      PAD_analysis = NA_character_,
-      complex_emotion_reasoning = NA_character_,
+      rationale = "필터링된 내용 (삭제, 단문 등)",
       error_message = NA_character_
     )
 } else {
@@ -369,8 +367,8 @@ if (should_enable_human_coding && nrow(final_df) >= min_size_for_mode) {
   tryCatch({
     # 성공적으로 분석된 데이터만 사용 (오류 제외) - 추가 샘플링 없이
     valid_for_coding <- final_df %>%
-      filter(!is.na(dominant_emotion), 
-             !dominant_emotion %in% c("API 오류", "파싱 오류", "분석 오류", "분석 제외"))
+      filter(!is.na(combinated_emotion), 
+             !combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류", "분석 제외"))
     
     log_message("INFO", sprintf("인간 코딩용 유효 샘플: %d개 (이미 분석 전 샘플링 완료)", 
                                 nrow(valid_for_coding)))
