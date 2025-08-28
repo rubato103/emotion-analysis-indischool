@@ -655,7 +655,7 @@ BatchMonitor <- R6Class("BatchMonitor",
       result_filename <- generate_filepath(selected_mode, data_count, ".parquet", is_batch = TRUE)
       
       # Parquet으로 저장
-      save_parquet(final_df, gsub("\.parquet$", "", result_filename))
+      save_parquet(final_df, gsub("\\.parquet$", "", result_filename))
 
       # 분석 이력 등록 (유효한 결과만)
       valid_results <- final_df %>% 
