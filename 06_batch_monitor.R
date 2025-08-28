@@ -256,143 +256,278 @@ BatchMonitor <- R6Class("BatchMonitor",
         results[[i]] <- jsonlite::fromJSON(result_lines[i])
       }
       
-      # 파싱된 결과도 RDS로 저장
-      parsed_file_path <- file.path("results", sprintf("batch_parsed_%s_%s.RDS", batch_id, timestamp))
+      # 파싱된 결과를 Parquet으로 저장
+      parsed_file_path <- file.path("results", sprintf("batch_parsed_%s_%s.parquet", batch_id, timestamp))
       save_parquet(results, gsub("\\.RDS$", "", parsed_file_path))
       log_message("INFO", sprintf("파싱된 결과 저장: %s", parsed_file_path))
       
       return(results)
     },
     
-    # 4. 결과를 데이터프레임으로 변환 및 파싱
+    # 4. 결과를 데이터프레임으로 변환 및 파싱 (integrate_batch_results.R 방식 적용)
     parse_batch_results = function(results, original_data) {
       log_message("INFO", "배치 결과 파싱 중...")
       
-      parsed_results <- vector("list", length(results))
+      # 결과를 데이터프레임으로 변환 (기존 로직 유지)
+      parsed_data <- vector("list", length(results))
       
       for (i in seq_along(results)) {
         result_item <- results[[i]]
         
-        # 메타데이터 기반 매칭을 위한 key 파싱
-        request_key <- result_item$key %||% result_item$metadata$key %||% paste0("request-", i)
+        # 기본 정보
+        key <- if (!is.null(result_item$key)) result_item$key else paste0("item_", i)
         
-        # key에서 메타데이터 추출
-        if (startsWith(request_key, "doc_")) {
-          # doc_id 기반 매칭
-          doc_id <- gsub("^doc_", "", request_key)
-          match_info <- list(type = "doc_id", value = doc_id)
-        } else if (grepl("^post_\\d+_comment_\\d+$", request_key)) {
-          # post_id, comment_id 기반 매칭
-          parts <- strsplit(request_key, "_")[[1]]
-          post_id <- as.numeric(parts[2])
-          comment_id <- as.numeric(parts[4])
-          match_info <- list(type = "post_comment", post_id = post_id, comment_id = comment_id)
-        } else {
-          # 순서 기반 폴백
-          row_index <- as.numeric(gsub("request-", "", request_key))
-          match_info <- list(type = "row_index", value = row_index)
-        }
-        
-        # 배치 응답 구조 확인: result_item$response가 실제 API 응답
-        if (is.null(result_item$response) || is.null(result_item$response$candidates)) {
-          # 오류 케이스
-          error_msg <- result_item$error$message %||% result_item$response$error$message %||% "알 수 없는 오류"
-          # 오류 결과에 매칭 정보 포함
-          error_result <- list(
-            match_info = match_info,
-            combinated_emotion = "API 오류",
-            rationale = error_msg,
-            기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
-            슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
-            P = NA, A = NA, D = NA,
-            complex_emotion = NA,
-            error_message = error_msg
-          )
-          parsed_results[[i]] <- error_result
-        } else {
-          # 성공 케이스 - JSON 응답 파싱
-          # 배치 응답 구조: result_item$response$candidates[[1]]$content$parts[[1]]$text
-          tryCatch({
-            candidates <- result_item$response$candidates
-            if (length(candidates) > 0 && !is.null(candidates[[1]]$content$parts)) {
-              parts <- candidates[[1]]$content$parts
-              if (length(parts) > 0 && !is.null(parts[[1]]$text)) {
-                response_text <- parts[[1]]$text
+        # 응답 텍스트 추출
+        response_text <- NULL
+        tryCatch({
+          # candidates가 data.frame인지 확인
+          if (!is.null(result_item$response) && 
+              !is.null(result_item$response$candidates)) {
+            
+            # candidates가 data.frame인 경우
+            if (is.data.frame(result_item$response$candidates)) {
+              if (nrow(result_item$response$candidates) > 0) {
+                # 첫 번째 행에서 content 추출
+                first_candidate <- result_item$response$candidates[1, ]
                 
-                emotion_result <- self$parse_emotion_json(response_text)
-                emotion_result$match_info <- match_info
-                parsed_results[[i]] <- emotion_result
-              } else {
-                stop("응답에서 텍스트를 찾을 수 없습니다")
+                # content가 data.frame인지 확인
+                if (!is.null(first_candidate$content) && is.data.frame(first_candidate$content)) {
+                  if (nrow(first_candidate$content) > 0) {
+                    # parts가 list인지 확인
+                    if (!is.null(first_candidate$content$parts) && is.list(first_candidate$content$parts)) {
+                      # 첫 번째 parts 요소가 data.frame인지 확인
+                      if (length(first_candidate$content$parts) > 0 && is.data.frame(first_candidate$content$parts[[1]])) {
+                        first_part <- first_candidate$content$parts[[1]]
+                        if (nrow(first_part) > 0 && !is.null(first_part$text)) {
+                          response_text <- first_part$text[1]
+                        }
+                      }
+                    }
+                  }
+                }
               }
-            } else {
-              stop("응답에서 candidates를 찾을 수 없습니다")
-            }
-          }, error = function(e) {
-            # 파싱 오류 결과에 매칭 정보 포함
-            parsing_error_result <- list(
-              match_info = match_info,
-              combinated_emotion = "파싱 오류",
-              rationale = sprintf("JSON 파싱 실패: %s", e$message),
-              기쁨 = NA, 신뢰 = NA, 공포 = NA, 놀람 = NA,
-              슬픔 = NA, 혐오 = NA, 분노 = NA, 기대 = NA,
-              P = NA, A = NA, D = NA,
-              complex_emotion = NA,
-              error_message = sprintf("파싱 오류: %s", e$message)
-            )
-            parsed_results[[i]] <- parsing_error_result
-          })
-        }
-      }
-      
-      # 메타데이터 기반 매칭을 위한 데이터 준비
-      final_df <- original_data
-      
-      # 각 결과를 메타데이터 기반으로 매칭하여 원본 데이터에 결합
-      for (i in seq_along(parsed_results)) {
-        result <- parsed_results[[i]]
-        match_info <- result$match_info
-        
-        # match_info에서 매칭 정보 제거 (결과에는 포함하지 않음)
-        result$match_info <- NULL
-        
-        # 매칭 대상 행 찾기
-        if (match_info$type == "doc_id" && "doc_id" %in% names(final_df)) {
-          target_rows <- which(final_df$doc_id == match_info$value)
-        } else if (match_info$type == "post_comment" && all(c("post_id", "comment_id") %in% names(final_df))) {
-          target_rows <- which(final_df$post_id == match_info$post_id & final_df$comment_id == match_info$comment_id)
-        } else if (match_info$type == "row_index") {
-          target_rows <- match_info$value
-          if (target_rows > nrow(final_df)) target_rows <- integer(0)
-        } else {
-          # 매칭 실패 시 건너뛰기
-          log_message("WARN", sprintf("매칭 실패: %s", jsonlite::toJSON(match_info)))
-          next
-        }
-        
-        # 매칭된 행에 결과 추가
-        if (length(target_rows) > 0) {
-          for (col_name in names(result)) {
-            if (col_name %in% names(final_df)) {
-              final_df[target_rows, col_name] <- result[[col_name]]
-            } else {
-              # 새 컬럼 추가
-              final_df[[col_name]] <- NA
-              final_df[target_rows, col_name] <- result[[col_name]]
             }
           }
+        }, error = function(e) {
+          log_message("WARN", sprintf("응답 텍스트 추출 중 오류 (항목 %d): %s", i, e$message))
+        })
+        
+        if (!is.null(response_text) && response_text != "") {
+          # JSON 파싱
+          # 코드 블록 마커 제거
+          json_text <- gsub("^```json\\n?", "", response_text)
+          json_text <- gsub("\\n?```$", "", json_text)
+          
+          tryCatch({
+            emotion_data <- jsonlite::fromJSON(json_text)
+            
+            # 기본 정보 추출
+            row_data <- list(
+              key = key,
+              기쁨 = if (!is.null(emotion_data$plutchik_emotions$기쁨)) emotion_data$plutchik_emotions$기쁨 else NA,
+              신뢰 = if (!is.null(emotion_data$plutchik_emotions$신뢰)) emotion_data$plutchik_emotions$신뢰 else NA,
+              공포 = if (!is.null(emotion_data$plutchik_emotions$공포)) emotion_data$plutchik_emotions$공포 else NA,
+              놀람 = if (!is.null(emotion_data$plutchik_emotions$놀람)) emotion_data$plutchik_emotions$놀람 else NA,
+              슬픔 = if (!is.null(emotion_data$plutchik_emotions$슬픔)) emotion_data$plutchik_emotions$슬픔 else NA,
+              혐오 = if (!is.null(emotion_data$plutchik_emotions$혐오)) emotion_data$plutchik_emotions$혐오 else NA,
+              분노 = if (!is.null(emotion_data$plutchik_emotions$분노)) emotion_data$plutchik_emotions$분노 else NA,
+              기대 = if (!is.null(emotion_data$plutchik_emotions$기대)) emotion_data$plutchik_emotions$기대 else NA,
+              P = if (!is.null(emotion_data$PAD$P)) emotion_data$PAD$P else NA,
+              A = if (!is.null(emotion_data$PAD$A)) emotion_data$PAD$A else NA,
+              D = if (!is.null(emotion_data$PAD$D)) emotion_data$PAD$D else NA,
+              emotion_source = if (!is.null(emotion_data$emotion_target$source)) emotion_data$emotion_target$source else NA,
+              emotion_direction = if (!is.null(emotion_data$emotion_target$direction)) emotion_data$emotion_target$direction else NA,
+              combinated_emotion = if (!is.null(emotion_data$combinated_emotion)) emotion_data$combinated_emotion else NA,
+              complex_emotion = if (!is.null(emotion_data$complex_emotion)) emotion_data$complex_emotion else NA,
+              rationale = if (!is.null(emotion_data$rationale)) emotion_data$rationale else NA,
+              error_message = NA
+            )
+            
+            parsed_data[[i]] <- row_data
+          }, error = function(e) {
+            # 파싱 오류 처리
+            row_data <- list(
+              key = key,
+              기쁨 = NA,
+              신뢰 = NA,
+              공포 = NA,
+              놀람 = NA,
+              슬픔 = NA,
+              혐오 = NA,
+              분노 = NA,
+              기대 = NA,
+              P = NA,
+              A = NA,
+              D = NA,
+              emotion_source = NA,
+              emotion_direction = NA,
+              combinated_emotion = "파싱 오류",
+              complex_emotion = NA,
+              rationale = paste("JSON 파싱 실패:", e$message),
+              error_message = e$message
+            )
+            parsed_data[[i]] <- row_data
+          })
+        } else {
+          # 응답이 없는 경우
+          row_data <- list(
+            key = key,
+            기쁨 = NA,
+            신뢰 = NA,
+            공포 = NA,
+            놀람 = NA,
+            슬픔 = NA,
+            혐오 = NA,
+            분노 = NA,
+            기대 = NA,
+            P = NA,
+            A = NA,
+            D = NA,
+            emotion_source = NA,
+            emotion_direction = NA,
+            combinated_emotion = "응답 없음",
+            complex_emotion = NA,
+            rationale = "API 응답이 없습니다",
+            error_message = "API 응답이 없습니다"
+          )
+          parsed_data[[i]] <- row_data
         }
       }
       
-      # 분석되지 않은 행에 기본값 설정
-      if (!"combinated_emotion" %in% names(final_df)) {
-        final_df$combinated_emotion <- "처리 안됨"
+      # 배치 결과 데이터프레임 생성
+      if (length(parsed_data) > 0) {
+        batch_df <- do.call(rbind.data.frame, parsed_data)
+        # 열 타입 정리
+        numeric_cols <- c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대", "P", "A", "D")
+        for (col in numeric_cols) {
+          if (col %in% names(batch_df)) {
+            batch_df[[col]] <- as.numeric(batch_df[[col]])
+          }
+        }
       } else {
-        final_df$combinated_emotion[is.na(final_df$combinated_emotion)] <- "처리 안됨"
+        batch_df <- data.frame()
       }
       
-      log_message("INFO", sprintf("결과 파싱 완료: %d행", nrow(final_df)))
-      return(final_df)
+      # 배치 결과의 키에서 post_id와 comment_id 추출 (integrate_batch_results.R 방식)
+      if (nrow(batch_df) > 0 && "key" %in% names(batch_df)) {
+        log_message("INFO", "키에서 ID 정보 추출 중...")
+        # 키에서 post_id와 comment_id 추출
+        key_parts <- strsplit(batch_df$key, "_")
+        
+        # 각 키를 파싱하여 post_id와 comment_id 추출
+        post_ids <- sapply(key_parts, function(parts) {
+          # "post_37353082_comment_0" 형식
+          if (length(parts) >= 4 && parts[1] == "post") {
+            as.numeric(parts[2])
+          } else {
+            NA
+          }
+        })
+        
+        comment_ids <- sapply(key_parts, function(parts) {
+          # "post_37353082_comment_0" 형식
+          if (length(parts) >= 4 && parts[3] == "comment") {
+            as.numeric(parts[4])
+          } else {
+            NA
+          }
+        })
+        
+        # 배치 결과에 post_id와 comment_id 추가
+        batch_df$post_id <- post_ids
+        batch_df$comment_id <- comment_ids
+        
+        log_message("INFO", sprintf("ID 추출 완료: %d개의 post_id, %d개의 comment_id", 
+                                   sum(!is.na(post_ids)), sum(!is.na(comment_ids))))
+      } else {
+        log_message("WARN", "배치 결과에 'key' 열이 없습니다")
+        return(data.frame())
+      }
+      
+      # 원데이터 로드 (integrate_batch_results.R 방식) - prompts_ready에서 직접 로드
+      log_message("INFO", "원데이터 직접 로드 중...")
+      
+      # 설정 파일의 기본 경로 사용, 확장자를 추가하여 파일 존재 여부 확인
+      base_path <- PATHS$prompts_data 
+      possible_files <- paste0(base_path, c(".parquet", ".RDS"))
+      existing_file <- possible_files[file.exists(possible_files)][1]
+
+      if (!is.na(existing_file)) {
+        full_original_data <- load_prompts_data() # 이 함수는 내부적으로 .parquet/.RDS를 처리함
+        if (is.null(full_original_data)) {
+            log_message("ERROR", "원데이터 로드에 실패했습니다.")
+            return(data.frame())
+        }
+        log_message("INFO", sprintf("원데이터 로드 성공: %d행, %d열", nrow(full_original_data), ncol(full_original_data)))
+      } else {
+        log_message("WARN", sprintf("원데이터 파일을 찾을 수 없습니다. 확인된 경로: %s", paste(possible_files, collapse=", ")))
+        return(data.frame())
+      }
+      
+      # 원데이터와 배치 결과 매칭 (integrate_batch_results.R 방식)
+      if (nrow(batch_df) > 0 && all(c("post_id", "comment_id") %in% names(batch_df))) {
+        log_message("INFO", "원데이터와 배치 결과 매칭 중...")
+        
+        # 데이터 타입 확인 및 변환
+        batch_df$post_id <- as.numeric(batch_df$post_id)
+        batch_df$comment_id <- as.numeric(batch_df$comment_id)
+        full_original_data$post_id <- as.numeric(full_original_data$post_id)
+        full_original_data$comment_id <- as.numeric(full_original_data$comment_id)
+        
+        # post_id와 comment_id를 기준으로 원데이터와 배치 결과 조인
+        matched_df <- full_original_data %>%
+          # 배치 결과에 있는 데이터만 필터링
+          semi_join(batch_df, by = c("post_id", "comment_id")) %>%
+          # 배치 결과와 조인
+          left_join(batch_df, by = c("post_id", "comment_id"))
+        
+        log_message("INFO", sprintf("매칭 결과: %d행", nrow(matched_df)))
+        
+        # 매칭된 데이터가 없는 경우
+        if (nrow(matched_df) == 0) {
+          log_message("WARN", "매칭된 데이터가 없습니다. 데이터 구조를 확인하세요.")
+          return(data.frame())
+        }
+        
+        # 일반 분석 결과 구조에 맞게 열 정리
+        log_message("INFO", "결과 구조 정리 중...")
+        # 일반 분석 결과의 열 순서와 이름 확인
+        regular_columns <- c(
+          "post_id", "comment_id", "page_url", "depth", "구분", "title", "author", "date", 
+          "views", "likes", "content", "prompt", "chunk_id",
+          "기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대",
+          "P", "A", "D", 
+          "emotion_source", "emotion_direction", 
+          "combinated_emotion", "complex_emotion", "rationale", "error_message"
+        )
+        
+        # 배치 결과에 없는 열 추가 (일반 분석 결과와 구조 맞춤)
+        if (!"chunk_id" %in% names(matched_df)) {
+          matched_df$chunk_id <- 1
+        }
+        
+        # 열 순서 정리 및 누락된 열 처리
+        final_df <- matched_df %>%
+          select(all_of(intersect(regular_columns, names(.))), 
+                 any_of(setdiff(regular_columns, names(.)))) %>%
+          # 누락된 열이 있다면 기본값으로 추가
+          mutate(
+            chunk_id = ifelse(is.na(chunk_id), 1, chunk_id),
+            error_message = ifelse(is.na(error_message), NA_character_, error_message)
+          )
+        
+        # 열 순서를 일반 분석 결과와 동일하게 맞춤
+        available_columns <- intersect(regular_columns, names(final_df))
+        if (length(available_columns) > 0 && nrow(final_df) > 0) {
+          final_df <- final_df[, available_columns, drop = FALSE]
+        }
+        
+        log_message("INFO", sprintf("결과 파싱 완료: %d행", nrow(final_df)))
+        return(final_df)
+      } else {
+        log_message("WARN", "매칭할 수 있는 데이터가 없습니다")
+        return(data.frame())
+      }
     },
     
     # 5. JSON 파싱 함수 (일반 분석과 동일한 결과 구조 생성)
@@ -432,132 +567,96 @@ BatchMonitor <- R6Class("BatchMonitor",
         }
       }
       
-      # 원본 데이터 로드 (05 스크립트에서 사용한 원본 데이터 재생성)
-      # prompts_ready.RDS에서 데이터 로드
-      if (file.exists(PATHS$prompts_data)) {
-        full_corpus_with_prompts <- load_prompts_data()
+      # 모드 결정 로직 (개선된 버전)
+      if (is.null(mode_info)) {
+        # 배치 이름에서 모드 추정 (개선된 로직)
+        selected_mode <- "batch_unknown"
         
-        # 모드별 샘플링 (05 스크립트와 동일한 로직)
-        if (is.null(mode_info)) {
-          # 배치 이름에서 모드 추정
-          if (grepl("code_check", batch_name, ignore.case = TRUE)) {
-            selected_mode <- "code_check"
-          } else if (grepl("pilot", batch_name, ignore.case = TRUE)) {
-            selected_mode <- "pilot"
-          } else if (grepl("sampling", batch_name, ignore.case = TRUE)) {
-            selected_mode <- "sampling"
-          } else if (grepl("full", batch_name, ignore.case = TRUE)) {
-            selected_mode <- "full"
-          } else {
-            selected_mode <- "batch_unknown"
+        # 배치 이름에 모드가 직접 포함된 경우
+        if (grepl("code_check", batch_name, ignore.case = TRUE)) {
+          selected_mode <- "code_check"
+        } else if (grepl("pilot", batch_name, ignore.case = TRUE)) {
+          selected_mode <- "pilot"
+        } else if (grepl("sampling", batch_name, ignore.case = TRUE)) {
+          selected_mode <- "sampling"
+        } else if (grepl("full", batch_name, ignore.case = TRUE)) {
+          selected_mode <- "full"
+        } else {
+          # 배치 작업 목록에서 모드 정보 추출
+          batch_jobs <- read_batch_jobs()
+          if (!is.null(batch_jobs)) {
+            for (job in batch_jobs) {
+              if (grepl(batch_name, job$batch_name, fixed = TRUE) || 
+                  grepl(job$batch_name, batch_name, fixed = TRUE)) {
+                selected_mode <- job$mode
+                break
+              }
+            }
           }
-        } else {
-          selected_mode <- mode_info
-        }
-        
-        # 동일한 샘플링 로직 사용
-        if (selected_mode %in% c("code_check", "pilot", "sampling", "full")) {
-          raw_sample <- get_sample_for_mode(full_corpus_with_prompts, selected_mode)
-        } else {
-          # 결과 개수만큼 빈 원본 데이터 생성 (나중에 results 길이에 맞춰 조정)
-          raw_sample <- data.frame(
-            doc_id = character(0),
-            content = character(0),
-            prompt = character(0),
-            구분 = character(0),
-            stringsAsFactors = FALSE
-          )
-        }
-        
-        # 기분석 데이터 필터링 (05 스크립트와 동일)
-        data_to_process <- tracker$filter_unanalyzed(
-          raw_sample,
-          exclude_types = c("batch", "sample", "test", "full", "adaptive_sample"),
-          model_filter = BATCH_CONFIG$model_name,
-          days_back = 30
-        )
-        
-        # 분석 제외 대상 필터링
-        original_data <- data_to_process %>%
-          mutate(content_cleaned = trimws(content)) %>%
-          filter(
-            !(is.na(content_cleaned) | content_cleaned == "" |
-              content_cleaned %in% c("내용 없음", "삭제된 댓글입니다.", "비밀 댓글입니다.") |
-              str_detect(content_cleaned, "작성자가 (댓글|글)을 삭제하였습니다") |
-              str_length(content_cleaned) <= 2 |
-              !str_detect(content_cleaned, "[가-힣A-Za-z]"))
-          ) %>%
-          select(-content_cleaned)
           
+          # 여전히 모드를 결정할 수 없는 경우 기본값 설정
+          if (selected_mode == "batch_unknown") {
+            selected_mode <- "code_check"  # 기본값으로 code_check 사용
+            log_message("INFO", "모드를 결정할 수 없어 기본값(code_check) 사용")
+          }
+        }
       } else {
-        # 폴백: 빈 원본 데이터 (나중에 results에 맞춰 생성)
-        original_data <- data.frame(
-          doc_id = character(0),
-          content = character(0),
-          prompt = character(0),
-          구분 = character(0),
-          stringsAsFactors = FALSE
-        )
+        selected_mode <- mode_info
       }
       
       # 결과 다운로드
       results <- self$download_results(batch_status)
       
-      # 원본 데이터를 실제 배치 결과 개수에 맞춰 조정
-      if (nrow(original_data) != length(results)) {
-        if (nrow(original_data) > length(results)) {
-          # 원본 데이터가 더 많으면 결과 개수에 맞춰 제한
-          log_message("INFO", sprintf("원본 데이터를 %d건에서 %d건으로 제한합니다", 
-                                     nrow(original_data), length(results)))
-          original_data <- original_data[1:length(results), ]
-        } else if (nrow(original_data) < length(results)) {
-          # 원본 데이터가 부족하면 빈 데이터로 채움
-          log_message("INFO", sprintf("원본 데이터를 %d건에서 %d건으로 확장합니다", 
-                                     nrow(original_data), length(results)))
-          additional_rows <- length(results) - nrow(original_data)
-          
-          # 원본 데이터와 동일한 컬럼 구조 유지
-          if (nrow(original_data) > 0) {
-            # 기존 데이터 구조를 복사하여 빈 행 생성
-            template_row <- original_data[1, ]
-            additional_data <- template_row[rep(1, additional_rows), ]
-            
-            # 기본값 설정
-            additional_data$doc_id <- paste0("batch_", gsub("batches/", "", batch_name), "_", 
-                                            (nrow(original_data)+1):length(results))
-            additional_data$content <- ""
-            additional_data$prompt <- ""
-            additional_data$구분 <- "배치처리"
-            additional_data$post_id <- NA
-            additional_data$comment_id <- NA
-          } else {
-            # 완전히 빈 경우 최소 구조 생성
-            additional_data <- data.frame(
-              doc_id = paste0("batch_", gsub("batches/", "", batch_name), "_", 1:additional_rows),
-              post_id = rep(NA, additional_rows),
-              comment_id = rep(NA, additional_rows),
-              content = rep("", additional_rows),
-              prompt = rep("", additional_rows),
-              구분 = rep("배치처리", additional_rows),
-              stringsAsFactors = FALSE
-            )
-          }
-          
-          original_data <- rbind(original_data, additional_data)
-        }
-      }
+      # 결과 파싱 (integrate_batch_results.R 방식 사용 - 원데이터는 parse_batch_results에서 직접 로드)
+      final_df <- self$parse_batch_results(results, NULL)
       
-      # 결과 파싱
-      final_df <- self$parse_batch_results(results, original_data)
+      # 결과가 비어 있는지 확인
+      if (nrow(final_df) == 0) {
+        log_message("WARN", "파싱된 결과가 없습니다")
+        # 빈 데이터 프레임을 적절한 구조로 생성
+        final_df <- data.frame(
+          post_id = numeric(0),
+          comment_id = numeric(0),
+          page_url = character(0),
+          depth = numeric(0),
+          구분 = character(0),
+          title = character(0),
+          author = character(0),
+          date = character(0),
+          views = numeric(0),
+          likes = numeric(0),
+          content = character(0),
+          prompt = character(0),
+          chunk_id = numeric(0),
+          기쁨 = numeric(0),
+          신뢰 = numeric(0),
+          공포 = numeric(0),
+          놀람 = numeric(0),
+          슬픔 = numeric(0),
+          혐오 = numeric(0),
+          분노 = numeric(0),
+          기대 = numeric(0),
+          P = numeric(0),
+          A = numeric(0),
+          D = numeric(0),
+          emotion_source = character(0),
+          emotion_direction = character(0),
+          combinated_emotion = character(0),
+          complex_emotion = character(0),
+          rationale = character(0),
+          error_message = character(0),
+          stringsAsFactors = FALSE
+        )
+      }
       
       # 파일명 생성 및 결과 저장
       data_count <- nrow(final_df)
-      rds_filename <- generate_filepath(selected_mode, data_count, ".RDS", is_batch = TRUE)
-      csv_filename <- generate_filepath(selected_mode, data_count, ".csv", is_batch = TRUE)
+      # 일반 분석 결과와 동일한 구조로 저장
+      result_filename <- generate_filepath(selected_mode, data_count, ".parquet", is_batch = TRUE)
       
-      save_analysis_results(final_df, mode = gsub("BATCH_", "", mode_info), timestamp = TRUE)
-      readr::write_excel_csv(final_df, csv_filename, na = "")
-      
+      # Parquet으로 저장
+      save_parquet(final_df, gsub("\.parquet$", "", result_filename))
+
       # 분석 이력 등록 (유효한 결과만)
       valid_results <- final_df %>% 
         filter(
@@ -581,11 +680,11 @@ BatchMonitor <- R6Class("BatchMonitor",
       cat("\n", rep("=", 70), "\n")
       cat("🎉 배치 결과 처리가 완료되었습니다!\n")
       cat(sprintf("📊 처리된 데이터: %d건\n", data_count))
-      cat(sprintf("💾 RDS 파일: %s\n", basename(rds_filename)))
-      cat(sprintf("💾 CSV 파일: %s\n", basename(csv_filename)))
+      cat(sprintf("💾 Parquet 파일: %s\n", basename(result_filename)))
+      
       cat(rep("=", 70), "\n")
       
-      log_message("INFO", sprintf("배치 처리 완료: %s", basename(rds_filename)))
+      log_message("INFO", sprintf("배치 처리 완료: %s", basename(result_filename)))
       log_message("INFO", "=== 배치 처리 종료 ===")
       
       return(final_df)
@@ -601,14 +700,38 @@ BatchMonitor <- R6Class("BatchMonitor",
       
       # 배치 결과 파일들 찾기
       raw_files <- list.files(results_dir, pattern = "^batch_raw_.*\\.jsonl$", full.names = TRUE)
-      parsed_files <- list.files(results_dir, pattern = "^batch_parsed_.*\\.RDS$", full.names = TRUE)
+      # Parquet 파일과 RDS 파일 모두 찾기
+      parsed_files_rds <- list.files(results_dir, pattern = "^batch_parsed_.*\\.RDS$", full.names = TRUE)
+      parsed_files_parquet <- list.files(results_dir, pattern = "^batch_parsed_.*\\.parquet$", full.names = TRUE)
+      parsed_files <- c(parsed_files_rds, parsed_files_parquet)
+      
+      # 파일 정보 생성
+      # raw_files와 parsed_files의 개수가 맞지 않을 수 있으므로 각각 처리
+      raw_count <- length(raw_files)
+      parsed_count <- length(parsed_files)
+      
+      # 더 많은 파일 수에 맞춰 처리
+      max_count <- max(raw_count, parsed_count)
+      
+      # 확장자를 제거한 파일명 생성
+      raw_names <- if (raw_count > 0) {
+        sub("^batch_raw_(.*?)_\\d{8}_\\d{6}\\.jsonl$", "\\1", basename(raw_files))
+      } else {
+        character(0)
+      }
+      
+      timestamps <- if (raw_count > 0) {
+        sub("^batch_raw_.*_(\\d{8}_\\d{6})\\.jsonl$", "\\1", basename(raw_files))
+      } else {
+        character(0)
+      }
       
       # 파일 정보 생성
       file_info <- data.frame(
-        raw_file = raw_files,
-        parsed_file = parsed_files,
-        batch_id = sub("^batch_raw_(.*?)_\\d{8}_\\d{6}\\.jsonl$", "\\1", basename(raw_files)),
-        timestamp = sub("^batch_raw_.*_(\\d{8}_\\d{6})\\.jsonl$", "\\1", basename(raw_files)),
+        raw_file = if (raw_count > 0) raw_files else character(max_count),
+        parsed_file = if (parsed_count > 0) parsed_files else character(max_count),
+        batch_id = if (raw_count > 0) raw_names else character(max_count),
+        timestamp = if (raw_count > 0) timestamps else character(max_count),
         stringsAsFactors = FALSE
       )
       
@@ -632,6 +755,10 @@ BatchMonitor <- R6Class("BatchMonitor",
           # RDS 파일에서 로드
           log_message("INFO", sprintf("RDS 파일에서 결과 로드: %s", file_path))
           return(load_parquet(gsub("\\.RDS$", "", file_path)))
+        } else if (grepl("\\.parquet$", file_path)) {
+          # Parquet 파일에서 로드
+          log_message("INFO", sprintf("Parquet 파일에서 결과 로드: %s", file_path))
+          return(load_parquet(gsub("\\.parquet$", "", file_path)))
         } else {
           stop("지원하지 않는 파일 형식입니다. .jsonl 또는 .RDS 파일만 지원합니다.")
         }

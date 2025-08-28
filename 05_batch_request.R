@@ -35,7 +35,7 @@ tryCatch({
 
 # 필요한 패키지 로드
 cat("📦 필요한 패키지 확인 중...\n")
-required_packages <- c("dplyr", "stringr", "jsonlite", "httr2", "readr", "R6")
+required_packages <- c("dplyr", "stringr", "jsonlite", "httr2", "readr", "R6", "purrr")
 
 # 설치되지 않은 패키지 확인
 tryCatch({
