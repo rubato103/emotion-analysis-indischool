@@ -22,9 +22,18 @@ PROMPT_CONFIG <- list(
 ## 대상: 초등교사 커뮤니티 텍스트
 
 ## 지시:
-1. 원본 게시글 맥락 고려하여 댓글 감정 분석
+1. 표면적 해석보다 감정의 동기를 고려하여 감정 스코어링
 
-2. **플루치크 8개 기본감정 점수(0.00-1.00)**:
+2. 추론 후 근거를 재검토하여 스코어 조정
+
+3. **감정 대상 (Primary Target) 분류**:
+3-1. 감정 대상을 두 가지로 구분하여 분류:
+emotion_source: 감정을 유발한 원인 (6가지 범주 중 선택)
+emotion_direction: 감정이 향하는 방향 (6가지 범주 중 선택)
+3-2. 6가지 범주: [교사,학부모,학생,학교내 외집단(교감/교장,행정실,공무직 등),교육행정기관 및 제도,교원단체]
+3-3. 이하 감정추론 전반에 감정대상의 이중구조를 고려할 것.
+
+4. **플루치크 8개 기본감정 점수(0.00-1.00)**:
 기쁨(↔슬픔): 평온→기쁨→황홀 | 만족, 즐거움, 환희, 행복감
 신뢰(↔혐오): 수용→신뢰→숭배 | 믿음, 의지, 존경, 애착
 공포(↔분노): 불안→공포→공황 | 걱정, 두려움, 경계, 위축
@@ -34,49 +43,56 @@ PROMPT_CONFIG <- list(
 분노(↔공포): 짜증→분노→격노 | 화남, 분개, 적대감, 격분
 기대(↔놀람): 관심→기대→경계 | 호기심, 준비, 예측, 계획
 
-3. **플루치크 감정 조합 규칙**: 
+5. **플루치크 감정 조합 규칙**: 
+- 감정 휠 순환 순서: 기쁨 → 신뢰 → 공포 → 놀람 → 슬픔 → 혐오 → 분노 → 기대 → (기쁨으로 순환)
 - 1차 조합(인접 감정): 강한 시너지 → 명확한 복합감정 
 - 2차 조합(한개 건너뛴): 보통 연결 → 복잡한 심리상태 
 - 3차 조합(대극 감정): 갈등 관계 → 내적 갈등/모순 
-- 매핑 없는 조합: 지배감정 단독으로 처리
+- 0.3 이상인 감정이 여러 개일 경우, 반드시 1차, 2차, 3차 조합 규칙을 적용하여 맥락에 따라 가장 적절한 조합감정 명명
 
-4. **PAD 점수(-1.00~1.00)**:
+6. **PAD 점수(-1.00~1.00)**:
    P(Pleasure): 긍정성
    A(Arousal): 활성화 
    D(Dominance): 개인 외적 통제감 - 환경/상황/타인과의 관계에서 
                  영향력 행사 및 통제력에 대한 주관적 인식
                  (※내적 감정조절 능력과 구별)
 
-5. 스코어링과 플루치크 감정조합 규칙에 따라 조합감정 명명
+7. **조합감정 (`combinated_emotion`) 명명**: 플루치크 감정 조합 규칙에 따라, 위 스코어링을 참조하여 `combinated_emotion` 필드에 조합감정의 이름을 명시합니다. (예: 경멸, 적대감)
 
-6. 플루치크+PAD 종합하여 복합감정 명명
+8. **복합감정 (`complex_emotion`) 명명**: `combinated_emotion`과 PAD 점수의 맥락을 종합적으로 고려하여, 최종적인 복합감정의 이름을 `complex_emotion` 필드에 명시합니다.
 
-7. 텍스트 근거로 추론과정 제시
+9. 텍스트 근거로 추론과정 제시
 
 ## 주의사항:
-- 대립감정 동시 고득점 불가
 - 0.3이상 감정들로 복합감정 구성
 - 교사 커뮤니티 맥락 반영
 - 짧은 표현: 단순하고 직관적 해석 우선
 - 긴 텍스트: 복합적 감정 조합 고려
-- 맥락에 따른 반어적 표현에 주의',
+- 맥락에 따른 반어적 표현에 주의'
+,
 
-  # 배치 전용 JSON 출력 지시 (기본 프롬프트에 추가됨)
-  batch_json_instruction = '
-
-## 중요: 응답은 반드시 유효한 JSON 형식으로만 출력하세요. 마크다운이나 다른 텍스트 없이 JSON만 출력하세요.
-
-## JSON 구조:
+  # 공통 JSON 구조 정의 (확장된 버전)
+  json_structure = '
+## JSON 응답 구조:
 {
   "plutchik_emotions": {
     "기쁨": 0.00, "신뢰": 0.00, "공포": 0.00, "놀람": 0.00,
     "슬픔": 0.00, "혐오": 0.00, "분노": 0.00, "기대": 0.00
   },
   "PAD": {"P": 0.00, "A": 0.00, "D": 0.00},
-  "combinated_emotion": "조합감정명",
-  "complex_emotion": "복합감정명",
-  "rationale": "플루치크 8대 감정과 PAD 점수에 대한 종합 분석 근거"
+  "emotion_target": {
+    "source": "감정을 유발한 원인 (7가지 범주 중 하나)",
+    "direction": "감정이 향하는 방향 (7가지 범주 중 하나)"
+  },
+  "combinated_emotion": "플루치크 규칙에 따른 조합감정명 (예: 경멸, 적대감 등)",
+  "complex_emotion": "PAD 맥락까지 종합한 최종 복합감정명",
+  "rationale": "모든 점수와 감정명을 종합한 최종 분석 근거"
 }',
+
+  # 배치 전용 JSON 출력 지시 (기본 프롬프트에 추가됨)
+  batch_json_instruction = '
+
+## 중요: 응답은 반드시 유효한 JSON 형식으로만 출력하세요. 마크다운이나 다른 텍스트 없이 JSON만 출력하세요.',
   
   # 댓글 분석용 작업 지시
   comment_task = "## 분석 과업: '원본 게시글' 맥락을 고려하여 '분석할 댓글'의 감정을 분석.",
@@ -198,9 +214,11 @@ ANALYSIS_CONFIG <- list(
 PATHS <- list(
   data_dir = "data",
   results_dir = "results",
-  source_data = "data/data_collection.csv",
-  prompts_data = "data/prompts_ready.RDS",
-  functions_file = "libs/functions.R"
+  source_data = "data/data_collection.csv",  # 원본 CSV는 유지 (입력 전용)
+  prompts_data = "data/prompts_ready",  # 확장자 없이 (자동 감지)
+  functions_file = "libs/functions.R",
+  checkpoints_dir = "checkpoints",
+  human_coding_dir = "human_coding"
 )
 
 # 파일명 설정
@@ -239,4 +257,30 @@ HUMAN_CODING_CONFIG <- list(
     emotions = c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대"), # 플루치크 8대 기본감정
     agree_options = c("동의", "비동의")  # 체크박스로 간소화
   )
+)
+
+# =============================================================================
+# JSON 스키마 설정 (중앙 관리)
+# =============================================================================
+EMOTION_SCHEMA <- list(
+  type = "OBJECT",
+  properties = list(
+    plutchik_emotions = list(type = "OBJECT", properties = list(
+      "기쁨" = list(type = "NUMBER", minimum = 0, maximum = 1), "신뢰" = list(type = "NUMBER", minimum = 0, maximum = 1),
+      "공포" = list(type = "NUMBER", minimum = 0, maximum = 1), "놀람" = list(type = "NUMBER", minimum = 0, maximum = 1),
+      "슬픔" = list(type = "NUMBER", minimum = 0, maximum = 1), "혐오" = list(type = "NUMBER", minimum = 0, maximum = 1),
+      "분노" = list(type = "NUMBER", minimum = 0, maximum = 1), "기대" = list(type = "NUMBER", minimum = 0, maximum = 1)
+    ), required = c("기쁨", "신뢰", "공포", "놀람", "슬픔", "혐오", "분노", "기대")),
+    PAD = list(type = "OBJECT", properties = list(
+      P = list(type = "NUMBER", minimum = -1, maximum = 1), A = list(type = "NUMBER", minimum = -1, maximum = 1), D = list(type = "NUMBER", minimum = -1, maximum = 1)
+    ), required = c("P", "A", "D")),
+    emotion_target = list(type = "OBJECT", properties = list(
+      source = list(type = "STRING"),
+      direction = list(type = "STRING")
+    ), required = c("source", "direction")),
+    combinated_emotion = list(type = "STRING"),
+    complex_emotion = list(type = "STRING"),
+    rationale = list(type = "STRING")
+  ),
+  required = c("plutchik_emotions", "PAD", "emotion_target", "combinated_emotion", "complex_emotion", "rationale")
 )

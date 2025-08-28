@@ -2,12 +2,12 @@
 # 목적: 대량 데이터를 할인된 비용으로 배치 처리 요청만 담당
 # 특징: 요청 생성 및 제출 전담, 모니터링은 06 스크립트에서 담당
 
-# 설정 및 유틸리티 로드 (오류 처리 포함)
+# 통합 초기화 시스템 로드 (Parquet 전용)
 cat("📂 종속 파일 로드 중...\n")
 
 tryCatch({
-  source("libs/config.R")
-  cat("✅ config.R 로드 완료\n")
+  source("libs/init.R")
+  cat("✅ init.R 로드 완료\n")
 }, error = function(e) {
   stop("❌ config.R 로드 실패: ", e$message)
 })
@@ -101,86 +101,44 @@ BatchRequestor <- R6Class("BatchRequestor",
     },
     
     
-    # 1. 배치 요청 파일 생성 (JSONL 형식)
+        # 1. 배치 요청 파일 생성 (스키마를 사용한 일관된 요청)
     create_batch_file = function(data, file_path) {
-      if (BATCH_CONFIG$detailed_logging) {
-        log_message("INFO", sprintf("배치 파일 생성 시작: %d개 요청 (모델: %s)", 
-                                   nrow(data), BATCH_CONFIG$model_name))
-      } else {
-        log_message("INFO", sprintf("배치 파일 생성 시작: %d개 요청", nrow(data)))
-      }
-      
-      # JSONL 파일 생성 - 각 라인은 완전한 GenerateContentRequest
-      jsonl_lines <- vector("character", nrow(data))
-      
-      for (i in seq_len(nrow(data))) {
-        # 기존 완성된 프롬프트 사용 + 배치용 JSON 지시만 추가
-        if ("prompt" %in% names(data) && !is.na(data$prompt[i])) {
-          # 01번 스크립트에서 생성된 완성 프롬프트 사용
-          base_prompt <- data$prompt[i]
-          batch_prompt <- paste0(base_prompt, PROMPT_CONFIG$batch_json_instruction)
-        } else {
-          # 폴백: 프롬프트가 없으면 새로 생성
-          batch_prompt <- create_analysis_prompt(
-            text = data$content[i],
-            구분 = data$구분[i],
-            title = if("title" %in% names(data)) data$title[i] else NULL,
-            context = if("context" %in% names(data)) data$context[i] else NULL,
-            context_title = if("context_title" %in% names(data)) data$context_title[i] else NULL,
-            batch_mode = TRUE  # 배치 모드 활성화
-          )
-        }
+      if (!exists("EMOTION_SCHEMA")) stop("❌ EMOTION_SCHEMA가 로드되지 않았습니다. config.R을 확인하세요.")
+      log_message("INFO", sprintf("배치 파일 생성 시작: %d개 요청 (모델: %s)", nrow(data), BATCH_CONFIG$model_name))
+
+      # 스키마를 tools 형식으로 변환 (일반 분석과 동일한 방식)
+      tools <- list(list(
+        function_declarations = list(list(
+          name = "extract_emotion",
+          description = "텍스트에서 감정 정보를 추출합니다.",
+          parameters = EMOTION_SCHEMA
+        ))
+      ))
+
+      # JSONL 라인 생성
+      jsonl_lines <- pmap_chr(list(i = seq_len(nrow(data))), function(i) {
+        row_data <- data[i, ]
         
-        # 메타데이터를 포함한 고유 key 생성 (원본 데이터 매칭용)
-        unique_key <- if ("doc_id" %in% names(data) && !is.na(data$doc_id[i])) {
-          # doc_id가 있으면 사용
-          paste0("doc_", data$doc_id[i])
-        } else if (all(c("post_id", "comment_id") %in% names(data))) {
-          # post_id, comment_id 조합 사용
-          paste0("post_", data$post_id[i], "_comment_", data$comment_id[i])
-        } else {
-          # 폴백: 순서 기반
-          sprintf("request-%d", i)
+        # 01번 스크립트에서 생성된 프롬프트를 수정 없이 그대로 사용
+        if (!("prompt" %in% names(row_data)) || is.na(row_data$prompt)) {
+          stop(sprintf("%d번째 행에 유효한 프롬프트가 없습니다. 01번 스크립트를 다시 실행하세요.", i))
         }
-        
-        # Google 공식 JSONL 형식: key + request 구조
-        jsonl_obj <- list(
-          key = unique_key,
-          request = list(
-            contents = list(
-              list(
-                parts = list(
-                  list(text = batch_prompt)
-                )
-              )
-            )
-          )
+        prompt_text <- row_data$prompt
+
+        unique_key <- paste0("post_", row_data$post_id, "_comment_", row_data$comment_id)
+
+        # 스키마를 포함한 구조화된 요청 생성
+        request_body <- list(
+          contents = list(list(parts = list(list(text = prompt_text)))),
+          tools = tools
         )
         
-        # JSONL 라인 형식: key + request 구조
-        jsonl_lines[i] <- jsonlite::toJSON(jsonl_obj, auto_unbox = TRUE)
-      }
-      
-      # JSONL 파일 작성
+        jsonl_obj <- list(key = unique_key, request = request_body)
+        jsonlite::toJSON(jsonl_obj, auto_unbox = TRUE, force = TRUE)
+      })
+
       writeLines(jsonl_lines, file_path, useBytes = TRUE)
-      
-      # 디버깅: 생성된 JSONL 파일의 첫 몇 라인 확인
-      if (length(jsonl_lines) > 0) {
-        log_message("DEBUG", sprintf("JSONL 첫 번째 라인: %s", substr(jsonl_lines[1], 1, 200)))
-        if (length(jsonl_lines) > 1) {
-          log_message("DEBUG", sprintf("JSONL 두 번째 라인: %s", substr(jsonl_lines[2], 1, 200)))
-        }
-      }
-      
-      # 파일 크기 확인
-      file_size_mb <- file.size(file_path) / (1024^2)
-      log_message("INFO", sprintf("배치 파일 생성 완료: %.2f MB", file_size_mb))
-      
-      if (file_size_mb > BATCH_CONFIG$max_file_size_mb) {
-        stop(sprintf("파일 크기(%.2f MB)가 제한(%.0f MB)을 초과합니다.", 
-                    file_size_mb, BATCH_CONFIG$max_file_size_mb))
-      }
-      
+      log_message("INFO", sprintf("배치 파일 생성 완료: %.2f MB", file.size(file_path) / (1024^2)))
       return(file_path)
     },
     
@@ -365,12 +323,10 @@ run_batch_request <- function(sample_mode = "ask") {
   log_message("INFO", "=== 배치 요청 시작 ===")
   
   # 1. 데이터 로드
-  if (!file.exists(PATHS$prompts_data)) {
-    stop("⚠️ prompts_ready.RDS 파일을 찾을 수 없습니다.")
+  full_corpus_with_prompts <- load_prompts_data()
+  if (is.null(full_corpus_with_prompts)) {
+    stop("⚠️ 프롬프트 데이터 로드에 실패했습니다. 01번 스크립트를 먼저 실행했는지, libs/config.R의 경로가 올바른지 확인하세요.")
   }
-  
-  full_corpus_with_prompts <- readRDS(PATHS$prompts_data)
-  log_message("INFO", "프롬프트 데이터 로드 완료")
   
   # 2. 분석 모드 결정
   if (sample_mode == "ask") {

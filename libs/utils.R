@@ -43,7 +43,7 @@ save_checkpoint <- function(data, checkpoint_name, script_name) {
   if (!dir.exists(checkpoint_dir)) dir.create(checkpoint_dir, recursive = TRUE)
   
   checkpoint_file <- file.path(checkpoint_dir, paste0(script_name, "_", checkpoint_name, ".RDS"))
-  saveRDS(data, checkpoint_file)
+  save_checkpoint(data, basename(gsub("\\.RDS$", "", checkpoint_file)))
   
   log_message("INFO", sprintf("체크포인트 저장: %s", checkpoint_file))
   return(checkpoint_file)
@@ -55,7 +55,7 @@ load_checkpoint <- function(checkpoint_name, script_name) {
   
   if (file.exists(checkpoint_file)) {
     log_message("INFO", sprintf("체크포인트 로드: %s", checkpoint_file))
-    return(readRDS(checkpoint_file))
+    return(load_checkpoint(basename(gsub("\\.RDS$", "", checkpoint_file))))
   }
   
   log_message("WARN", sprintf("체크포인트 파일 없음: %s", checkpoint_file))

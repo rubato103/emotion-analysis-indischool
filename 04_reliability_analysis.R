@@ -1,8 +1,8 @@
 # 인간 코더 신뢰도 분석 시스템
 # Krippendorff's Alpha 계산 및 리포트 생성
 
-# 필요한 패키지 및 함수 로드
-source("libs/config.R")
+# 통합 초기화 시스템 로드 (Parquet 전용)
+source("libs/init.R")
 source("libs/utils.R")
 source("modules/human_coding.R")
 source("additional_reliability_functions.R")
@@ -483,8 +483,8 @@ sample_label <- gsub("human_coding_info_|\\.csv", "", basename(selected_info_fil
 
 # 상세 결과 저장
 cat("  📊 상세 결과 저장 중... (RDS 형식)\n")
-reliability_file <- file.path("results", sprintf("reliability_analysis_%s_%s.RDS", sample_label, timestamp))
-saveRDS(reliability_results, reliability_file)
+reliability_file <- file.path("results", sprintf("reliability_analysis_%s_%s", sample_label, timestamp))
+save_parquet(reliability_results, reliability_file)
 cat(sprintf("    저장 완료: %s\n", basename(reliability_file)))
 
 # CSV 요약 저장 (정확도 정보 포함)

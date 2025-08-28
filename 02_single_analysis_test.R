@@ -1,8 +1,8 @@
 # 단건 분석 테스트 (분석 이력 추적 적용)
-# 목적: RDS 파일에서 샘플 1개 선택하여 감정분석 테스트, 결과 이력 저장
+# 목적: Parquet 파일에서 샘플 1개 선택하여 감정분석 테스트, 결과 이력 저장
 
-# 설정 및 유틸리티 로드
-source("libs/config.R")
+# 통합 초기화 시스템 로드 (Parquet 전용)
+source("libs/init.R")
 source("libs/utils.R")
 source("modules/analysis_tracker.R")
 source("modules/human_coding.R")
@@ -37,12 +37,13 @@ top_p_val <- TEST_CONFIG$top_p
 # 3. 데이터 로드 및 샘플링
 log_message("INFO", "=== 단건 분석 테스트 시작 ===")
 
-if (!file.exists(PATHS$prompts_data)) {
-  log_message("ERROR", sprintf("%s 파일을 찾을 수 없습니다.", PATHS$prompts_data))
+tryCatch({
+  full_corpus_with_prompts <- load_prompts_data()
+  log_message("INFO", "Parquet 파일 로드 완료")
+}, error = function(e) {
+  log_message("ERROR", "data/prompts_ready 파일을 찾을 수 없습니다.")
   stop("01_data_loading_and_prompt_generation.R 먼저 실행해주세요.")
-}
-full_corpus_with_prompts <- readRDS(PATHS$prompts_data)
-log_message("INFO", "RDS 파일 로드 완료")
+})
 
 # 기분석 데이터 제외한 샘플링
 unanalyzed_data <- tracker$filter_unanalyzed(
@@ -127,6 +128,12 @@ if (!is.na(final_single_df$error_message)) {
   # PAD 모델 점수 출력
   pad_scores <- final_single_df %>% select(P, A, D)
   print_scores(pad_scores, "PAD 모델 점수")
+  
+  # 감정 대상 출력
+  if (!is.na(final_single_df$emotion_source) && !is.na(final_single_df$emotion_direction)) {
+    cat("  - 감정 유발 원인:", final_single_df$emotion_source, "\n")
+    cat("  - 감정 향하는 방향:", final_single_df$emotion_direction, "\n")
+  }
   
   cat("  - 조합 감정:", final_single_df$combinated_emotion, "\n")
   cat("  - 복합 감정:", final_single_df$complex_emotion, "\n\n")

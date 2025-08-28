@@ -213,7 +213,7 @@ prepare_coding_data_with_checkbox <- function(analysis_results) {
       any_of(c("combinated_emotion")),
       any_of(c("P", "A", "D")),
       any_of(c("complex_emotion")),
-      any_of(c("emotion_source", "emotion_direction")),
+      any_of(c("primary_target")),
       any_of(c("rationale"))
     ) %>%
     # 체크박스용 컬럼 추가 (논리값으로 초기화)
@@ -229,7 +229,7 @@ prepare_coding_data_with_checkbox <- function(analysis_results) {
       any_of(c("combinated_emotion")),
       any_of(c("P", "A", "D")),
       any_of(c("complex_emotion")),
-      any_of(c("emotion_source", "emotion_direction")),
+      any_of(c("primary_target")),
       any_of(c("rationale")),
       human_agree
     )
@@ -299,9 +299,7 @@ apply_sheet_formatting <- function(sheet, data) {
         "조합감정: AI가 판단한 주요 조합감정",
         "P(쾌락), A(각성), D(지배): PAD 모델 점수 (-1.00~1.00)",
         "복합감정: PAD 모델 기반 복합 감정 명칭",
-        "감정 유발 원인(emotion_source): 감정을 유발한 원인 (7가지 범주)",
-        "감정 방향(emotion_direction): 감정이 향하는 방향 (7가지 범주)",
-        "7가지 범주: 교사,학부모,학생,학교관리자,교육행정기관,교원단체,정책과제도",
+        "감정대상: 감정을 유발한 대상 (교사/학부모/학생/제도와법률/학교문화/리더십)",
         "분석근거: AI 분석의 논리적 근거",
         "human_agree: 동의(체크)/비동의(해제) - 체크박스 설정 필수"
       )

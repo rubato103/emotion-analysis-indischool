@@ -1,8 +1,8 @@
 # 전체 감정분석 실행 (중복 분석 방지 적용)
 # 목적: 병렬 처리로 전체 데이터 감정분석, 기분석 데이터 제외, 실패 항목 재분석
 
-# 설정 및 유틸리티 로드
-source("libs/config.R")
+# 통합 초기화 시스템 로드 (Parquet 전용)
+source("libs/init.R")
 source("libs/utils.R")
 source("modules/analysis_tracker.R")
 source("modules/human_coding.R")
@@ -57,12 +57,13 @@ plan(multisession, workers = availableCores() - 1)
 log_message("INFO", sprintf("%d개의 코어를 사용하여 병렬 처리를 시작합니다.", nbrOfWorkers()))
 
 # 3. 데이터 로드 및 분석 대상 결정
-if (!file.exists(PATHS$prompts_data)) { 
-  log_message("ERROR", sprintf("%s 파일을 찾을 수 없습니다.", PATHS$prompts_data))
-  stop("⚠️ prompts_ready.RDS 파일을 찾을 수 없습니다.") 
-}
-full_corpus_with_prompts <- readRDS(PATHS$prompts_data)
-log_message("INFO", "프롬프트 데이터 로드 완료")
+tryCatch({
+  full_corpus_with_prompts <- load_prompts_data()
+  log_message("INFO", "프롬프트 데이터 로드 완료")
+}, error = function(e) {
+  log_message("ERROR", "data/prompts_ready 파일을 찾을 수 없습니다.")
+  stop("⚠️ 01_data_loading_and_prompt_generation.R 먼저 실행해주세요.")
+})
 
 # 3-1. 분석 모드 결정 및 데이터 샘플링
 if (ANALYSIS_MODE == "ask") {
@@ -245,8 +246,8 @@ if (api_call_count == 0) {
   
   # 5. 실패 항목 재분석 (기존 로직과 동일)
   rerun_final_df <- NULL
-  successful_df <- initial_api_results_df %>% filter(!(combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(combinated_emotion)))
-  failed_df <- initial_api_results_df %>% filter(combinated_emotion %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(combinated_emotion))
+  successful_df <- initial_api_results_df %>% filter(!(emotion_source %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(emotion_source)))
+  failed_df <- initial_api_results_df %>% filter(emotion_source %in% c("API 오류", "파싱 오류", "분석 오류") | is.na(emotion_source))
   
   if (nrow(failed_df) > 0) {
     log_message("WARN", sprintf("%d개 항목이 실패하여 재분석을 진행합니다...", nrow(failed_df)))
@@ -289,7 +290,9 @@ if (nrow(data_skipped) > 0) {
       기쁨 = NA_real_, 신뢰 = NA_real_, 공포 = NA_real_, 놀람 = NA_real_,
       슬픔 = NA_real_, 혐오 = NA_real_, 분노 = NA_real_, 기대 = NA_real_,
       P = NA_real_, A = NA_real_, D = NA_real_,
-      combinated_emotion = "분석 제외",
+      emotion_source = "분석 제외",
+      emotion_direction = "분석 제외",
+      combinated_emotion = NA_character_,
       complex_emotion = NA_character_,
       rationale = "필터링된 내용 (삭제, 단문 등)",
       error_message = NA_character_
@@ -310,37 +313,29 @@ final_df <- bind_rows(
 # 8. 로컬 저장 및 인간 코딩용 구글 시트 업로드
 # 4단계 모드별 파일명 생성 (타임스탬프 포함)
 if (selected_mode == "code_check") {
-  rds_filename <- generate_filepath("code_check", nrow(data_to_process), ".RDS")
-  csv_filename <- generate_filepath("code_check", nrow(data_to_process), ".csv")
   sample_label <- sprintf("CODE_CHECK_%ditems", nrow(data_to_process))
 } else if (selected_mode == "pilot") {
-  rds_filename <- generate_filepath("pilot", nrow(data_to_process), ".RDS")
-  csv_filename <- generate_filepath("pilot", nrow(data_to_process), ".csv")
   sample_label <- sprintf("PILOT_%ditems", nrow(data_to_process))
 } else if (selected_mode == "sampling") {
-  rds_filename <- generate_filepath("sampling", nrow(data_to_process), ".RDS")
-  csv_filename <- generate_filepath("sampling", nrow(data_to_process), ".csv")
   sample_label <- sprintf("SAMPLING_%ditems", nrow(data_to_process))
 } else if (selected_mode == "full") {
-  rds_filename <- generate_filepath("full", nrow(data_to_process), ".RDS")
-  csv_filename <- generate_filepath("full", nrow(data_to_process), ".csv")
   sample_label <- "FULL"
 } else if (selected_mode == "sample") {
   # 기존 샘플링 모드 (하위 호환성)
   if (analysis_type == "adaptive_sample") {
-    rds_filename <- generate_filepath("adaptive", nrow(data_to_process), ".RDS")
-    csv_filename <- generate_filepath("adaptive", nrow(data_to_process), ".csv")
     sample_label <- sprintf("ADAPTIVE_%ditems", nrow(data_to_process))
   } else {
-    rds_filename <- generate_filepath("sample", SAMPLE_POST_COUNT, ".RDS")
-    csv_filename <- generate_filepath("sample", SAMPLE_POST_COUNT, ".csv")
     sample_label <- sprintf("SAMPLE_%dposts", SAMPLE_POST_COUNT)
   }
 }
 
-saveRDS(final_df, rds_filename)
+# Parquet 형식으로 저장 (타임스탬프 포함)
+parquet_filename <- save_analysis_results(final_df, selected_mode, timestamp = TRUE)
+
+# CSV도 함께 저장 (호환성)
+csv_filename <- generate_filepath("csv", nrow(data_to_process), ".csv")
 readr::write_excel_csv(final_df, csv_filename, na = "")
-log_message("INFO", sprintf("분석 결과가 '%s' 및 '%s' 파일로 저장되었습니다.", rds_filename, csv_filename))
+log_message("INFO", sprintf("분석 결과가 '%s' 및 '%s' 파일로 저장되었습니다.", parquet_filename, csv_filename))
 
 # 인간 코딩용 구글 시트 생성 (모드별 조건부 실행)
 should_enable_human_coding <- case_when(

@@ -2,12 +2,12 @@
 # 목적: 배치 작업 상태 모니터링, 완료된 데이터 다운로드 및 파싱 전담
 # 특징: 05 스크립트에서 요청한 배치 작업의 후속 처리 담당
 
-# 설정 및 유틸리티 로드 (오류 처리 포함)
+# 통합 초기화 시스템 로드 (Parquet 전용)
 cat("📂 종속 파일 로드 중...\n")
 
 tryCatch({
-  source("libs/config.R")
-  cat("✅ config.R 로드 완료\n")
+  source("libs/init.R")
+  cat("✅ init.R 로드 완료\n")
 }, error = function(e) {
   stop("❌ config.R 로드 실패: ", e$message)
 })
@@ -258,7 +258,7 @@ BatchMonitor <- R6Class("BatchMonitor",
       
       # 파싱된 결과도 RDS로 저장
       parsed_file_path <- file.path("results", sprintf("batch_parsed_%s_%s.RDS", batch_id, timestamp))
-      saveRDS(results, parsed_file_path)
+      save_parquet(results, gsub("\\.RDS$", "", parsed_file_path))
       log_message("INFO", sprintf("파싱된 결과 저장: %s", parsed_file_path))
       
       return(results)
@@ -435,7 +435,7 @@ BatchMonitor <- R6Class("BatchMonitor",
       # 원본 데이터 로드 (05 스크립트에서 사용한 원본 데이터 재생성)
       # prompts_ready.RDS에서 데이터 로드
       if (file.exists(PATHS$prompts_data)) {
-        full_corpus_with_prompts <- readRDS(PATHS$prompts_data)
+        full_corpus_with_prompts <- load_prompts_data()
         
         # 모드별 샘플링 (05 스크립트와 동일한 로직)
         if (is.null(mode_info)) {
@@ -555,7 +555,7 @@ BatchMonitor <- R6Class("BatchMonitor",
       rds_filename <- generate_filepath(selected_mode, data_count, ".RDS", is_batch = TRUE)
       csv_filename <- generate_filepath(selected_mode, data_count, ".csv", is_batch = TRUE)
       
-      saveRDS(final_df, rds_filename)
+      save_analysis_results(final_df, mode = gsub("BATCH_", "", mode_info), timestamp = TRUE)
       readr::write_excel_csv(final_df, csv_filename, na = "")
       
       # 분석 이력 등록 (유효한 결과만)
@@ -631,7 +631,7 @@ BatchMonitor <- R6Class("BatchMonitor",
         } else if (grepl("\\.RDS$", file_path)) {
           # RDS 파일에서 로드
           log_message("INFO", sprintf("RDS 파일에서 결과 로드: %s", file_path))
-          return(readRDS(file_path))
+          return(load_parquet(gsub("\\.RDS$", "", file_path)))
         } else {
           stop("지원하지 않는 파일 형식입니다. .jsonl 또는 .RDS 파일만 지원합니다.")
         }
@@ -661,7 +661,7 @@ BatchMonitor <- R6Class("BatchMonitor",
       latest_file <- file_info[order(file_info$timestamp, decreasing = TRUE)[1], ]
       
       log_message("INFO", sprintf("배치 결과 로드: %s", latest_file$parsed_file))
-      return(readRDS(latest_file$parsed_file))
+      return(load_parquet(gsub("\\.RDS$", "", latest_file$parsed_file)))
     }
   )
 )
