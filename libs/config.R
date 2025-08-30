@@ -18,92 +18,154 @@
 
 PROMPT_CONFIG <- list(
   # 공통 기본 프롬프트 (일반분석과 배치분석 모두 사용)
-  base_instructions = '## 역할: 리서치 보조원
-## 대상: 초등교사 커뮤니티 텍스트
+  base_instructions = '## ROLE: Research Assistant
+## TARGET: Elementary School Teacher Community Text (Korean)
 
-## 지시:
-1. 표면적 해석보다 감정의 동기를 고려하여 감정 스코어링
+## INSTRUCTIONS:
+1.  Score emotions based on underlying motives, not just surface-level text.
+2.  Final Review: After writing the rationale, you MUST adjust the scores and emotion_target classifications to ensure they are logically consistent with your final reasoning.
 
-2. 추론 후 근거를 재검토하여 스코어 조정
+4.  **Score Plutchik"s 8 Basic Emotions (0.00-1.00)**:
+    * Joy(기쁨)↔Sadness(슬픔): Serenity → Joy → Ecstasy | satisfaction, pleasure, delight, happiness
+    * Trust(신뢰)↔Disgust(혐오): Acceptance → Trust → Admiration | belief, reliance, respect, attachment
+    * Fear(공포)↔Anger(분노): Apprehension → Fear → Terror | anxiety, worry, caution, withdrawal
+    * Surprise(놀람)↔Anticipation(기대): Distraction → Surprise → Amazement | astonishment, shock, confusion
+    * Sadness(슬픔)↔Joy(기쁨): Pensiveness → Sadness → Grief | disappointment, loss, despair
+    * Disgust(혐오)↔Trust(신뢰): Boredom → Disgust → Loathing | rejection, contempt, aversion
+    * Anger(분노)↔Fear(공포): Annoyance → Anger → Rage | fury, resentment, hostility, outrage
+    * Anticipation(기대)↔Surprise(놀람): Interest → Anticipation → Vigilance | curiosity, preparation, planningJoy(기쁨)↔Sadness(슬픔), Trust(신뢰)↔Disgust(혐오), Fear(공포)↔Anger(분노), Surprise(놀람)↔Anticipation(기대)
 
-3. **감정 대상 (Primary Target) 분류**:
-3-1. 감정 대상을 두 가지로 구분하여 분류:
-emotion_source: 감정을 유발한 원인 (6가지 범주 중 선택)
-emotion_direction: 감정이 향하는 방향 (6가지 범주 중 선택)
-3-2. 6가지 범주: [교사,학부모,학생,학교내 외집단(교감/교장,행정실,공무직 등),교육행정기관 및 제도,교원단체]
-3-3. 이하 감정추론 전반에 감정대상의 이중구조를 고려할 것.
+5.  **Apply Plutchik"s Combination Rules**:
+    * **Emotion Wheel Sequence**: 기쁨 → 신뢰 → 공포 → 놀람 → 슬픔 → 혐오 → 분노 → 기대 → (cycle)
+    5-1.  Find the Primary Dyad (adjacent emotions) with the highest combined scores first. Name the combinated_emotion based on this dyad.
+      * Examples: 기쁨+신뢰=사랑(Love), 신뢰+공포=복종(Submission), 분노+기대=공격성(Aggressiveness), 기쁨+분노=질투(Jealousy)
+    5-2.  If no strong primary dyad exists, describe the emotional state in combinated_emotion (e.g., 분노와 슬픔의 공존).
+      * Use of Other Combinations: Use secondary dyads (one apart) and opposites to explain psychological complexity within the rationale, but not for naming the combinated_emotion unless they are the dominant emotional theme.
 
-4. **플루치크 8개 기본감정 점수(0.00-1.00)**:
-기쁨(↔슬픔): 평온→기쁨→황홀 | 만족, 즐거움, 환희, 행복감
-신뢰(↔혐오): 수용→신뢰→숭배 | 믿음, 의지, 존경, 애착
-공포(↔분노): 불안→공포→공황 | 걱정, 두려움, 경계, 위축
-놀람(↔기대): 주의분산→놀람→경악 | 의외, 당황, 충격
-슬픔(↔기쁨): 우울→슬픔→비탄 | 실망, 상실감, 애도, 절망
-혐오(↔신뢰): 지루함→혐오→역겨움 | 거부감, 경멸, 반감
-분노(↔공포): 짜증→분노→격노 | 화남, 분개, 적대감, 격분
-기대(↔놀람): 관심→기대→경계 | 호기심, 준비, 예측, 계획
+6.  **Score PAD Model (-1.00~1.00)**:
+    * P(Pleasure)
+    * A(Arousal): The intensity or energy level of the emotion.
+    * D(Dominance): The sense of control or influence over the situation/others.
+      Closer to +1.0 when the speaker feels in control, empowered, influential, or is taking initiative (e.g., offering a solution, making a strong assertion).
+      Closer to -1.0 when the speaker feels controlled, helpless, submissive, or victimized by external factors (e.g., policies, other people).
 
-5. **플루치크 감정 조합 규칙**: 
-- 감정 휠 순환 순서: 기쁨 → 신뢰 → 공포 → 놀람 → 슬픔 → 혐오 → 분노 → 기대 → (기쁨으로 순환)
-- 1차 조합(인접 감정): 강한 시너지 → 명확한 복합감정 
-- 2차 조합(한개 건너뛴): 보통 연결 → 복잡한 심리상태 
-- 3차 조합(대극 감정): 갈등 관계 → 내적 갈등/모순 
-- 0.3 이상인 감정이 여러 개일 경우, 반드시 1차, 2차, 3차 조합 규칙을 적용하여 맥락에 따라 가장 적절한 조합감정 명명
+7.  **Name `combinated_emotion`**: Name the emotion based on the combination rules.
 
-6. **PAD 점수(-1.00~1.00)**:
-   P(Pleasure): 긍정성
-   A(Arousal): 활성화 
-   D(Dominance): 개인 외적 통제감 - 환경/상황/타인과의 관계에서 
-                 영향력 행사 및 통제력에 대한 주관적 인식
-                 (※내적 감정조절 능력과 구별)
+8.  **Name `complex_emotion`**: Name the final complex emotion by synthesizing the `combinated_emotion` and the PAD scores.
 
-7. **조합감정 (`combinated_emotion`) 명명**: 플루치크 감정 조합 규칙에 따라, 위 스코어링을 참조하여 `combinated_emotion` 필드에 조합감정의 이름을 명시합니다. (예: 경멸, 적대감)
+9.  **Provide Rationale**: For the rationale field, write a concise, qualitative narrative. Explain the reasoning for the complex_emotion by connecting it to specific nuances and quotes in the text. Do not repeat numerical scores or classification paths from other fields, as this information is already structured.
 
-8. **복합감정 (`complex_emotion`) 명명**: `combinated_emotion`과 PAD 점수의 맥락을 종합적으로 고려하여, 최종적인 복합감정의 이름을 `complex_emotion` 필드에 명시합니다.
+## CAUTIONS:
+* Grounded Inference: All reasoning must originate from the text. Use broader context (e.g., the original post, teacher community norms) only to interpret ambiguous phrases or to deepen the understanding of stated facts. Context should not be used to invent targets or causes that have no textual basis. The text provides the "what" and "who"; the context informs the "why" and "how intensely"
+* Name complex emotions based on 2-3 strong emotions (score > 0.3).
+* **교사 커뮤니티 맥락 반영 (Reflect the context of the Korean teacher community).**
+* Prioritize simple, intuitive interpretations for short texts.
+* Consider complex emotional combinations for long texts.
+* Beware of irony and sarcasm.
 
-9. 텍스트 근거로 추론과정 제시
-
-## 주의사항:
-- 0.3이상 감정들로 복합감정 구성
-- 교사 커뮤니티 맥락 반영
-- 짧은 표현: 단순하고 직관적 해석 우선
-- 긴 텍스트: 복합적 감정 조합 고려
-- 맥락에 따른 반어적 표현에 주의'
+'
 ,
 
   # 공통 JSON 구조 정의 (확장된 버전)
-  json_structure = '
-## JSON 응답 구조:
+    json_structure = '## JSON Response Structure:
 {
   "plutchik_emotions": {
     "기쁨": 0.00, "신뢰": 0.00, "공포": 0.00, "놀람": 0.00,
     "슬픔": 0.00, "혐오": 0.00, "분노": 0.00, "기대": 0.00
   },
-  "PAD": {"P": 0.00, "A": 0.00, "D": 0.00},
-  "emotion_target": {
-    "source": "감정을 유발한 원인 (7가지 범주 중 하나)",
-    "direction": "감정이 향하는 방향 (7가지 범주 중 하나)"
+  "PAD": {
+    "P": 0.00, 
+    "A": 0.00, 
+    "D": 0.00
   },
-  "combinated_emotion": "플루치크 규칙에 따른 조합감정명 (예: 경멸, 적대감 등)",
-  "complex_emotion": "PAD 맥락까지 종합한 최종 복합감정명",
-  "rationale": "모든 점수와 감정명을 종합한 최종 분석 근거"
-}',
+  "emotion_target": {
+    "source": {
+      "major": "Major category of the emotion`s cause",
+      "middle": "Middle category of the emotion`s cause",
+      "minor": "Minor category of the emotion`s cause (if applicable)"
+    },
+    "direction": {
+      "major": "Major category of the emotion`s target",
+      "middle": "Middle category of the emotion`s target",
+      "minor": "Minor category of the emotion`s target (if applicable)"
+    }
+  },
+  "combinated_emotion": "Name of combined emotion based on Plutchik`s rules (e.g., 경멸, 적대감)",
+  "complex_emotion": "Final complex emotion name, synthesizing with PAD context",
+  "rationale": "Comprehensive reasoning for all scores and emotion names based on the text"
+}
+
+## IMPORTANT OUTPUT INSTRUCTION:
+1. The final output must be a valid JSON object that **strictly adheres to the requested structure**.
+2. All keys and string values within this JSON must be entirely in **KOREAN (한국어)**.
+',
 
   # 배치 전용 JSON 출력 지시 (기본 프롬프트에 추가됨)
-  batch_json_instruction = '
-
-## 중요: 응답은 반드시 유효한 JSON 형식으로만 출력하세요. 마크다운이나 다른 텍스트 없이 JSON만 출력하세요.',
+  batch_json_instruction = '',
+  
   
   # 댓글 분석용 작업 지시
-  comment_task = "## 분석 과업: '원본 게시글' 맥락을 고려하여 '분석할 댓글'의 감정을 분석.",
+  comment_task = "## TASK: Considering the context of the 'Original Post', analyze the emotion of the following 'Comment to Analyze'.
+3.  **Emotion Target Classification**: Structure the `source`(cause) and `direction`(target) as separate JSON objects, each with `major`, `middle`, and `minor` keys. **For example: `'source': {'major': '1. 학교 내부', 'middle': '1-3. 교직원', 'minor': '동료 교사'}`.**
+
+    * **[General Classification Principles (Apply to ALL text)]**
+        * **Direct Cause Priority**: When classifying the source, you must identify the actor or event that directly prompted the user to write the text. This is often the subject of the immediate action being discussed (e.g., a person's statement, a union's action), not the broader background problem.
+            * Example 1 (State vs. Trigger): For the text 'My colleague pushed all their work onto me, so I got burnout,' the source is 1-3. 교직원 - 동료 교사 (the colleague's action), not 1-5. 교사 개인 - 번아웃/정서적 소진 (the resulting state).
+            * Example 2 (Actor vs. Topic): For a comment criticizing a specific teacher's union like 'Jeongyojo can't even unify 40,000 members,' the source is 2-3. 사회/외부 - 교원 단체 (the specific actor), not 3-2. 정보/담론 (the general topic).
+        * **Specificity Priority**: Always classify to the most specific '소분류' (minor category). Use '중분류' (middle category) only if a minor category is not applicable.
+        * **Source/Direction Separation**: The source (cause) and direction (target) can be different. The direction is the final target where the emotion is expressed or psychologically projected. (e.g., Anger caused by a frustrating 'policy' (source) might be projected onto a more accessible 'manager' (direction)).
+        * **Minimize 'Other'**: Use the '3. 기타' (Other) category only for exceptional cases. If used, specify the reason in the `rationale`.
+
+    * **[Additional Principles for Comments ONLY (댓글 분석 시 추가 원칙)]**
+        * When analyzing a comment, the Original Post (OP) and its author are key context.
+        * **For the `source`**: If the comment reacts to the **OP’s content/idea**, the `source` is often `3-2. 정보/담론`. If it reacts to the **author`s action** of posting, the `source` is often `1-3. 교직원 - 동료 교사`.
+        * **For the `direction`**: If the emotion is aimed **at the author**, the `direction` is `1-3. 교직원 - 동료 교사`. If the emotion **is shared with the author towards a third party**, the `direction` is that third party.
+
+    * **[KOREAN Classification System]**
+        * **1. 학교 내부 (Internal to School)**
+            * **1-1. 학생 (Student)**: (소분류: 생활지도/문제행동(Guidance/Behavioral Issues), 학습/수업 태도(Learning/Class Attitude), 교우/사제 관계(Peer/Teacher Relations))
+            * **1-2. 학부모 (Parent)**: (소분류: 소통/상담(Communication/Counseling), 민원/갈등(Complaints/Conflict), 교육 참여/요구(Involvement/Demands))
+            * **1-3. 교직원 (School Staff)**: (소분류: 관리자(Supervisor/Superior), 동료 교사(Colleague), 기타 직원(Other Staff))
+            * **1-4. 교육 활동 (Educational Activities)**: (소분류: 교과/수업(Curriculum/Class), 행정 업무(Administrative Work), 학교 행사/활동(School Events))
+            * **1-5. 교사 개인 (Teacher - Personal)**: (소분류: 전문성/효능감(Professionalism/Efficacy), 번아웃/정서적 소진(Burnout/Emotional Exhaustion), 워라밸/복무(Work-Life Balance/Duty))
+        * **2. 학교 외부 (External to School)**
+            * **2-1. 교육 당국 (Education Authorities)**: (소분류: 교육부(Ministry of Education), 교육청(Office of Education))
+            * **2-2. 제도/정책 (System/Policy)**: (소분류: 법률(Law), 행정 정책(Administrative Policy), 인사/평가 제도(HR/Evaluation System))
+            * **2-3. 사회/외부 (Society/External)**: (소분류: 언론/미디어(Media), 정치권(Politics), 관련 기관(Related Organizations), 교원 단체(Teacher Union/Group))
+        * **3. 기타 (Etc.)**
+            * **3-1. 특정 사건/이슈 (Specific Incident/Issue)**: (소분류: 교육계 주요 사건(Major Educational Event), 커뮤니티 내 논쟁(Community Debate))
+            * **3-2. 정보/담론 (Information/Discourse)**: (소분류: 불특정 다수 비난(Public Criticism), 특정 뉴스/콘텐츠(Specific News/Content))",
   
   # 게시글 분석용 작업 지시  
-  post_task = "## 분석 과업: 다음 '게시글'의 감정을 분석.",
+  post_task = "## TASK: Analyze the emotion of the following 'Post'.
+  3.  **Emotion Target Classification**: Structure the `source`(cause) and `direction`(target) as separate JSON objects, each with `major`, `middle`, and `minor` keys. **For example: `'source': {'major': '1. 학교 내부', 'middle': '1-3. 교직원', 'minor': '동료 교사'}`.**
+
+    * **[General Classification Principles]**
+        * **Direct Cause Priority**: When classifying the source, you must identify the actor or event that directly prompted the user to write the text. This is often the subject of the immediate action being discussed (e.g., a person's statement, a union's action), not the broader background problem.
+            * Example 1 (State vs. Trigger): For the text 'My colleague pushed all their work onto me, so I got burnout,' the source is 1-3. 교직원 - 동료 교사 (the colleague's action), not 1-5. 교사 개인 - 번아웃/정서적 소진 (the resulting state).
+            * Example 2 (Actor vs. Topic): For a comment criticizing a specific teacher's union like 'Jeongyojo can't even unify 40,000 members,' the source is 2-3. 사회/외부 - 교원 단체 (the specific actor), not 3-2. 정보/담론 (the general topic).
+        * **Specificity Priority**: Always classify to the most specific '소분류' (minor category). Use '중분류' (middle category) only if a minor category is not applicable.
+        * **Source/Direction Separation**: The source (cause) and direction (target) can be different. The direction is the final target where the emotion is expressed or psychologically projected. (e.g., Anger caused by a frustrating 'policy' (source) might be projected onto a more accessible 'manager' (direction)).
+
+    * **[KOREAN Classification System]**
+        * **1. 학교 내부 (Internal to School)**
+            * **1-1. 학생 (Student)**: (소분류: 생활지도/문제행동(Guidance/Behavioral Issues), 학습/수업 태도(Learning/Class Attitude), 교우/사제 관계(Peer/Teacher Relations))
+            * **1-2. 학부모 (Parent)**: (소분류: 소통/상담(Communication/Counseling), 민원/갈등(Complaints/Conflict), 교육 참여/요구(Involvement/Demands))
+            * **1-3. 교직원 (School Staff)**: (소분류: 관리자(Supervisor/Superior), 동료 교사(Colleague), 기타 직원(Other Staff))
+            * **1-4. 교육 활동 (Educational Activities)**: (소분류: 교과/수업(Curriculum/Class), 행정 업무(Administrative Work), 학교 행사/활동(School Events))
+            * **1-5. 교사 개인 (Teacher - Personal)**: (소분류: 전문성/효능감(Professionalism/Efficacy), 번아웃/정서적 소진(Burnout/Emotional Exhaustion), 워라밸/복무(Work-Life Balance/Duty))
+        * **2. 학교 외부 (External to School)**
+            * **2-1. 교육 당국 (Education Authorities)**: (소분류: 교육부(Ministry of Education), 교육청(Office of Education))
+            * **2-2. 제도/정책 (System/Policy)**: (소분류: 법률(Law), 행정 정책(Administrative Policy), 인사/평가 제도(HR/Evaluation System))
+            * **2-3. 사회/외부 (Society/External)**: (소분류: 언론/미디어(Media), 정치권(Politics), 관련 기관(Related Organizations), 교원 단체(Teacher Union/Group))
+        * **3. 기타 (Etc.)**
+            * **3-1. 특정 사건/이슈 (Specific Incident/Issue)**: (소분류: 교육계 주요 사건(Major Educational Event), 커뮤니티 내 논쟁(Community Debate))
+            * **3-2. 정보/담론 (Information/Discourse)**: (소분류: 불특정 다수 비난(Public Criticism), 특정 뉴스/콘텐츠(Specific News/Content))",
   
   # 섹션 헤더
-  context_header = "# 원본 게시글 (맥락)",
-  comment_header = "# 분석할 댓글 (분석 대상)",
-  post_header = "# 분석할 게시글 (분석 대상)"
+  context_header = "# ORIGINAL POST (Context)",
+  comment_header = "# COMMENT TO ANALYZE (Target)",
+  post_header = "# POST TO ANALYZE (Target)"
 )
 
 # =============================================================================
@@ -275,12 +337,14 @@ EMOTION_SCHEMA <- list(
       P = list(type = "NUMBER", minimum = -1, maximum = 1), A = list(type = "NUMBER", minimum = -1, maximum = 1), D = list(type = "NUMBER", minimum = -1, maximum = 1)
     ), required = c("P", "A", "D")),
     emotion_target = list(type = "OBJECT", properties = list(
-      source = list(type = "STRING"),
-      direction = list(type = "STRING")
-    ), required = c("source", "direction")),
-    combinated_emotion = list(type = "STRING"),
-    complex_emotion = list(type = "STRING"),
-    rationale = list(type = "STRING")
-  ),
-  required = c("plutchik_emotions", "PAD", "emotion_target", "combinated_emotion", "complex_emotion", "rationale")
-)
+      source = list(type = "OBJECT", properties = list(
+        major = list(type = "STRING"),
+        middle = list(type = "STRING"),
+        minor = list(type = "STRING")
+      ), required = c("major", "middle")),
+      direction = list(type = "OBJECT", properties = list(
+        major = list(type = "STRING"),
+        middle = list(type = "STRING"),
+        minor = list(type = "STRING")
+      ), required = c("major", "middle"))
+t(type = "STRING")
